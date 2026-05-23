@@ -518,12 +518,12 @@ export default function App() {
               >
                 <ReactMarkdown
                   components={{
-                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
-                    ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
-                    ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
-                    li: ({ node, ...props }) => <li className="text-[14.5px]" {...props} />,
-                    strong: ({ node, ...props }) => <strong className="font-bold" {...props} />,
-                    em: ({ node, ...props }) => <em className="italic" {...props} />,
+                    p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                    ul: ({ node, ...props }: any) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                    ol: ({ node, ...props }: any) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
+                    li: ({ node, ...props }: any) => <li className="text-[14.5px]" {...props} />,
+                    strong: ({ node, ...props }: any) => <strong className="font-bold" {...props} />,
+                    em: ({ node, ...props }: any) => <em className="italic" {...props} />,
                     code: ({ node, className, children, ...props }: any) => {
                       const match = /language-(\w+)/.exec(className || '');
                       const inline = !match;
