@@ -26,6 +26,15 @@ interface PastChat {
   avatars?: AvatarItem[];
 }
 
+interface UserProfile {
+  name: string;
+  email: string;
+  avatarUrl: string;
+  joinedDate: string;
+  reflectionsCount: number;
+  prayersCount: number;
+}
+
 // --- Custom Icons matching the sketch and theme ---
 const CrossIcon: React.FC<IconProps> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -146,6 +155,15 @@ const PAST_CHATS: PastChat[] = [
 export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [userProfile] = useState<UserProfile>({
+    name: "Sarah Jenkins",
+    email: "sarah.jenkins@quantumfaith.net",
+    avatarUrl: "https://i.pravatar.cc/150?img=49",
+    joinedDate: "Member since May 2025",
+    reflectionsCount: 12,
+    prayersCount: 24
+  });
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
@@ -301,6 +319,30 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {/* Sidebar Footer - User Profile */}
+          <div className="p-4 border-t border-[#F0EBE1] bg-white">
+            <button 
+              onClick={() => {
+                setIsProfileOpen(true);
+                setIsSidebarOpen(false);
+              }}
+              className="w-full flex items-center space-x-3 p-3 rounded-[20px] hover:bg-[#F0EBE1]/50 text-left transition-all duration-300 group"
+            >
+              <img 
+                src={userProfile.avatarUrl} 
+                alt="user avatar" 
+                className="w-10 h-10 rounded-full object-cover border border-[#E5E0D8] group-hover:scale-105 transition-transform" 
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-[14px] font-semibold text-[#4A4036] truncate">{userProfile.name}</p>
+                <p className="text-[11px] text-[#A69C8E] truncate">{userProfile.email}</p>
+              </div>
+              <svg className="w-5 h-5 text-[#A69C8E] group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Header - Soft, inviting, with the cross icon from the sketch */}
@@ -438,6 +480,85 @@ export default function App() {
             <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
               Take a moment to whisper a quick prayer before you send.
             </p>
+          </div>
+        </div>
+
+        {/* Profile Page Overlay */}
+        <div 
+          className={`
+            absolute inset-0 bg-[#FAF8F5] z-50 flex flex-col transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
+            ${isProfileOpen ? 'translate-y-0' : 'translate-y-full'}
+          `}
+        >
+          {/* Profile Header */}
+          <header className="flex items-center px-6 py-5 border-b border-[#F0EBE1] bg-[#FAF8F5]/90 backdrop-blur-md sticky top-0 z-10">
+            <button 
+              onClick={() => setIsProfileOpen(false)}
+              className="p-2 -ml-2 text-[#8B7D6B] hover:text-[#4A4036] transition-colors rounded-full hover:bg-[#F0EBE1]"
+              aria-label="Go back to chat"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <h2 className="text-lg font-semibold text-[#4A4036] ml-2">Spiritual Profile</h2>
+          </header>
+
+          {/* Profile Content */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-[#FAF8F5] to-[#EFECE6]/30">
+            {/* Avatar Section */}
+            <div className="flex flex-col items-center py-4">
+              <div className="relative">
+                <img 
+                  src={userProfile.avatarUrl} 
+                  alt={userProfile.name} 
+                  className="w-24 h-24 rounded-full object-cover border-2 border-white shadow-md"
+                />
+                <div className="absolute bottom-0 right-0 w-7 h-7 bg-[#8B7D6B] text-white rounded-full flex items-center justify-center border-2 border-white shadow-sm cursor-pointer hover:bg-[#6D6253] transition-colors">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </div>
+              </div>
+              <h3 className="text-xl font-bold text-[#4A4036] mt-4">{userProfile.name}</h3>
+              <p className="text-xs text-[#8B7D6B] font-medium mt-1">{userProfile.joinedDate}</p>
+            </div>
+
+            {/* Spiritual Stats */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white p-4 rounded-[20px] border border-[#F0EBE1] text-center shadow-sm">
+                <p className="text-2xl font-bold text-[#8B7D6B]">{userProfile.reflectionsCount}</p>
+                <p className="text-[11px] text-[#A69C8E] uppercase tracking-wider font-semibold mt-1">Reflections</p>
+              </div>
+              <div className="bg-white p-4 rounded-[20px] border border-[#F0EBE1] text-center shadow-sm">
+                <p className="text-2xl font-bold text-[#8B7D6B]">{userProfile.prayersCount}</p>
+                <p className="text-[11px] text-[#A69C8E] uppercase tracking-wider font-semibold mt-1">Whispered Prayers</p>
+              </div>
+            </div>
+
+            {/* Profile Info Details */}
+            <div className="bg-white rounded-[24px] border border-[#F0EBE1] p-5 space-y-4 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.02)]">
+              <div>
+                <label className="text-[11px] text-[#A69C8E] uppercase tracking-wider font-bold">Display Name</label>
+                <p className="text-[15px] font-medium text-[#4A4036] mt-1 border-b border-[#F0EBE1]/60 pb-2">{userProfile.name}</p>
+              </div>
+              <div>
+                <label className="text-[11px] text-[#A69C8E] uppercase tracking-wider font-bold">Email Address</label>
+                <p className="text-[15px] font-medium text-[#4A4036] mt-1 border-b border-[#F0EBE1]/60 pb-2">{userProfile.email}</p>
+              </div>
+            </div>
+
+            {/* Logout/Dummy Action Button */}
+            <div className="pt-4">
+              <button 
+                onClick={() => {
+                  alert("Sign-out functionality will be enabled once your database is connected.");
+                }}
+                className="w-full py-4 bg-[#F0EBE1] hover:bg-[#E5E0D8] text-[#8B7D6B] font-semibold text-[14.5px] rounded-[24px] transition-all duration-300"
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
         
