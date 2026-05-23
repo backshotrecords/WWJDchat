@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 
 // --- Types & Interfaces ---
 interface IconProps {
@@ -421,7 +422,33 @@ export default function App() {
                   }
                 `}
               >
-                {msg.text}
+                <ReactMarkdown
+                  components={{
+                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                    ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                    ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
+                    li: ({ node, ...props }) => <li className="text-[14.5px]" {...props} />,
+                    strong: ({ node, ...props }) => <strong className="font-bold" {...props} />,
+                    em: ({ node, ...props }) => <em className="italic" {...props} />,
+                    code: ({ node, className, children, ...props }: any) => {
+                      const match = /language-(\w+)/.exec(className || '');
+                      const inline = !match;
+                      return inline ? (
+                        <code className="bg-[#F0EBE1] text-[#6D6253] px-1 py-0.5 rounded text-[13px] font-mono border border-[#E5E0D8]/40" {...props}>
+                          {children}
+                        </code>
+                      ) : (
+                        <pre className="bg-[#F0EBE1]/40 p-3 rounded-lg overflow-x-auto text-[13px] font-mono my-2 border border-[#F0EBE1] max-w-full">
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        </pre>
+                      );
+                    }
+                  }}
+                >
+                  {msg.text}
+                </ReactMarkdown>
               </div>
               <span className="text-[11px] text-[#A69C8E] mt-1.5 px-2">
                 {msg.timestamp}
