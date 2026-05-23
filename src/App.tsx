@@ -484,12 +484,8 @@ export default function App() {
         </div>
 
         {/* Profile Page Overlay */}
-        <div 
-          className={`
-            absolute inset-0 bg-[#FAF8F5] z-50 flex flex-col transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
-            ${isProfileOpen ? 'translate-y-0 opacity-100 visible' : 'translate-y-full opacity-0 invisible pointer-events-none'}
-          `}
-        >
+        {isProfileOpen && (
+          <div className="absolute inset-0 bg-[#FAF8F5] z-50 flex flex-col animate-slide-up">
           {/* Profile Header */}
           <header className="flex items-center px-6 py-5 border-b border-[#F0EBE1] bg-[#FAF8F5]/90 backdrop-blur-md sticky top-0 z-10">
             <button 
@@ -561,6 +557,7 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
         
       </div>
     </div>
