@@ -104,6 +104,14 @@ const MenuIcon: React.FC<IconProps> = ({ className }) => (
   </svg>
 );
 
+const MicIcon: React.FC<IconProps> = ({ className }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+    <line x1="12" y1="19" x2="12" y2="22" />
+  </svg>
+);
+
 // --- Mock responses for the prototype ---
 const MOCK_RESPONSES = [
   "Take a deep breath. In moments of frustration, patience is often the quietest yet strongest response.",
@@ -176,6 +184,92 @@ export default function App() {
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const audioChunks = useRef<Blob[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Dynamic textarea height adjustment up to 8 lines (roughly 192px)
+  const adjustTextareaHeight = () => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      const maxHeight = 192; // 8 lines * 24px line height
+      const newHeight = Math.min(textarea.scrollHeight, maxHeight);
+      textarea.style.height = `${newHeight}px`;
+    }
+  };
+
+  useEffect(() => {
+    adjustTextareaHeight();
+  }, [inputText]);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunks.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunks.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
+        
+        setIsTyping(true);
+        try {
+          const response = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'audio/webm',
+            },
+            body: audioBlob,
+          });
+
+          if (!response.ok) {
+            throw new Error(`Transcription API status ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (data.text) {
+            setInputText(prev => prev ? `${prev} ${data.text}` : data.text);
+          }
+        } catch (err) {
+          console.error("Transcription error:", err);
+          alert("Could not transcribe audio. Please type your situation manually.");
+        } finally {
+          setIsTyping(false);
+        }
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone permission is required to record a whisper.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleMicClick = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
 
   // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = () => {
@@ -475,25 +569,54 @@ export default function App() {
             onSubmit={handleSend}
             className="flex items-end bg-white border border-[#E5E0D8] rounded-[32px] p-2 shadow-sm focus-within:ring-2 focus-within:ring-[#DED7CD] focus-within:border-transparent transition-all"
           >
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend(e);
-                }
-              }}
-              placeholder="Share your situation..."
-              className="flex-1 max-h-32 min-h-[44px] bg-transparent resize-none outline-none py-3 px-4 text-[#4A4036] placeholder-[#A69C8E]"
-              rows={1}
-            />
+            <button
+              type="button"
+              onClick={handleMicClick}
+              className={`p-3 rounded-full flex-shrink-0 transition-all duration-300 ${
+                isRecording 
+                  ? 'bg-red-500 text-white animate-pulse shadow-md scale-105' 
+                  : 'bg-transparent text-[#8B7D6B] hover:bg-[#F0EBE1]'
+              }`}
+              title={isRecording ? "Stop recording" : "Whisper with voice"}
+            >
+              <MicIcon className="w-5 h-5" />
+            </button>
+
+            {isRecording ? (
+              <div className="flex-1 flex items-center justify-start space-x-1.5 px-4 h-[44px] text-[#8B7D6B] font-semibold text-[13px]">
+                <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></div>
+                <span className="animate-pulse">Recording whisper...</span>
+                <div className="flex items-end space-x-0.5 h-4 ml-3">
+                  <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-3" style={{ animationDelay: '0ms', animationDuration: '0.6s' }}></div>
+                  <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-4" style={{ animationDelay: '150ms', animationDuration: '0.5s' }}></div>
+                  <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-2" style={{ animationDelay: '300ms', animationDuration: '0.7s' }}></div>
+                  <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-3" style={{ animationDelay: '450ms', animationDuration: '0.6s' }}></div>
+                </div>
+              </div>
+            ) : (
+              <textarea
+                ref={textareaRef}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend(e);
+                  }
+                }}
+                placeholder="Share your situation..."
+                className="flex-1 max-h-[192px] min-h-[44px] bg-transparent resize-none outline-none py-3 px-4 text-[#4A4036] placeholder-[#A69C8E]"
+                rows={1}
+                style={{ height: 'auto' }}
+              />
+            )}
+
             <button 
               type="submit"
-              disabled={!inputText.trim() || isTyping}
+              disabled={!inputText.trim() || isTyping || isRecording}
               className={`
                 p-3 rounded-full ml-2 mb-0.5 flex-shrink-0 transition-all duration-300
-                ${inputText.trim() && !isTyping 
+                ${inputText.trim() && !isTyping && !isRecording
                   ? 'bg-[#8B7D6B] text-white hover:bg-[#6D6253] shadow-md transform hover:scale-105' 
                   : 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
                 }
