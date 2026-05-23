@@ -486,8 +486,8 @@ export default function App() {
         {/* Profile Page Overlay */}
         <div 
           className={`
-            absolute inset-0 bg-[#FAF8F5] z-50 flex flex-col transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
-            ${isProfileOpen ? 'translate-y-0' : 'translate-y-full'}
+            absolute inset-0 bg-[#FAF8F5] z-50 flex flex-col transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
+            ${isProfileOpen ? 'translate-y-0 opacity-100 visible' : 'translate-y-full opacity-0 invisible pointer-events-none'}
           `}
         >
           {/* Profile Header */}
