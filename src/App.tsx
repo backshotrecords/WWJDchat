@@ -234,11 +234,25 @@ export default function App() {
     setIsTyping(false);
   };
 
+  const handleMenuClick = (label: string) => {
+    setIsMenuOpen(false);
+    if (label === "Start New Conversation") {
+      setMessages([
+        {
+          id: Date.now(),
+          sender: 'ai',
+          text: "Welcome to this quiet space. As we seek His guidance, trust that the Lord's gentle whispers can find us anywhere—even reaching through the intricate threads of the quantum network to touch your heart today. What troubles your spirit?",
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
+    }
+  };
+
   return (
     // Main container - using a very warm, soft off-white background (#FAF8F5)
-    <div className="flex justify-center w-full min-h-screen bg-[#EFECE6] font-sans text-[#4A4036] p-0 sm:p-4 md:p-8">
+    <div className="flex justify-center items-center w-full h-[100dvh] bg-[#EFECE6] font-sans text-[#4A4036] p-0 sm:p-4 md:p-8 overflow-hidden">
       {/* Mobile App Frame constraint */}
-      <div className="flex flex-col w-full max-w-md bg-[#FAF8F5] sm:rounded-[40px] shadow-2xl overflow-hidden relative border border-[#E5E0D8]">
+      <div className="flex flex-col w-full h-full max-w-md bg-[#FAF8F5] sm:h-[800px] sm:max-h-[90dvh] sm:rounded-[40px] shadow-2xl overflow-hidden relative border border-[#E5E0D8]">
         
         {/* Global Overlay to close menu when clicking outside */}
         <div 
@@ -331,7 +345,7 @@ export default function App() {
                   return (
                     <button 
                       key={option.label}
-                      onClick={() => setIsMenuOpen(false)}
+                      onClick={() => handleMenuClick(option.label)}
                       className="w-full text-left px-5 py-3.5 flex items-center space-x-3 hover:bg-[#F0EBE1]/70 text-[#4A4036] group transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
                       style={{
                         transitionDelay: isMenuOpen ? `${index * 45}ms` : '0ms',
