@@ -186,6 +186,8 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [shouldPulse, setShouldPulse] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -221,6 +223,7 @@ export default function App() {
         stream.getTracks().forEach(track => track.stop());
         const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
         
+        setIsTranscribing(true);
         setIsTyping(true);
         try {
           const response = await fetch('/api/transcribe', {
@@ -238,12 +241,17 @@ export default function App() {
           const data = await response.json();
           if (data.text) {
             setInputText(prev => prev ? `${prev} ${data.text}` : data.text);
+            setShouldPulse(true);
+            setTimeout(() => {
+              setShouldPulse(false);
+            }, 1500);
           }
         } catch (err) {
           console.error("Transcription error:", err);
           alert("Could not transcribe audio. Please type your situation manually.");
         } finally {
           setIsTyping(false);
+          setIsTranscribing(false);
         }
       };
 
@@ -567,19 +575,28 @@ export default function App() {
         <div className="p-4 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5] to-transparent pt-6">
           <form 
             onSubmit={handleSend}
-            className="flex items-end bg-white border border-[#E5E0D8] rounded-[32px] p-2 shadow-sm focus-within:ring-2 focus-within:ring-[#DED7CD] focus-within:border-transparent transition-all"
+            className={`
+              flex items-end bg-white border rounded-[32px] p-2 shadow-sm focus-within:ring-2 focus-within:ring-[#DED7CD] focus-within:border-transparent transition-all
+              ${shouldPulse 
+                ? 'animate-heavenly-burst' 
+                : 'border-[#E5E0D8]'
+              }
+            `}
           >
             <button
               type="button"
+              disabled={isTranscribing}
               onClick={handleMicClick}
               className={`p-3 rounded-full flex-shrink-0 transition-all duration-300 ${
                 isRecording 
                   ? 'bg-red-500 text-white animate-pulse shadow-md scale-105' 
-                  : 'bg-transparent text-[#8B7D6B] hover:bg-[#F0EBE1]'
+                  : isTranscribing
+                    ? 'bg-[#FAF8F5] text-[#8B7D6B] cursor-not-allowed'
+                    : 'bg-transparent text-[#8B7D6B] hover:bg-[#F0EBE1]'
               }`}
-              title={isRecording ? "Stop recording" : "Whisper with voice"}
+              title={isRecording ? "Stop recording" : isTranscribing ? "Transcribing speech..." : "Whisper with voice"}
             >
-              <MicIcon className="w-5 h-5" />
+              <MicIcon className={`w-5 h-5 ${isTranscribing ? 'animate-spin' : ''}`} />
             </button>
 
             {isRecording ? (
@@ -592,6 +609,11 @@ export default function App() {
                   <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-2" style={{ animationDelay: '300ms', animationDuration: '0.7s' }}></div>
                   <div className="w-0.5 bg-[#8B7D6B] rounded-full animate-bounce h-3" style={{ animationDelay: '450ms', animationDuration: '0.6s' }}></div>
                 </div>
+              </div>
+            ) : isTranscribing ? (
+              <div className="flex-1 flex flex-col justify-center space-y-1.5 px-4 h-[44px]">
+                <div className="h-2 bg-[#F0EBE1] rounded-full w-3/4 animate-pulse"></div>
+                <div className="h-2 bg-[#F0EBE1] rounded-full w-1/2 animate-pulse" style={{ animationDelay: '150ms' }}></div>
               </div>
             ) : (
               <textarea
@@ -613,10 +635,10 @@ export default function App() {
 
             <button 
               type="submit"
-              disabled={!inputText.trim() || isTyping || isRecording}
+              disabled={!inputText.trim() || isTyping || isRecording || isTranscribing}
               className={`
                 p-3 rounded-full ml-2 mb-0.5 flex-shrink-0 transition-all duration-300
-                ${inputText.trim() && !isTyping && !isRecording
+                ${inputText.trim() && !isTyping && !isRecording && !isTranscribing
                   ? 'bg-[#8B7D6B] text-white hover:bg-[#6D6253] shadow-md transform hover:scale-105' 
                   : 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
                 }
