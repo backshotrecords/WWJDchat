@@ -47,11 +47,11 @@ AI's Guidance:
 "${lastAiResponse}"
 
 Your task:
-Based on the user's situation and the AI's guidance, generate a single, powerful, positive spiritual affirmation in the first person ("I am...", "I choose...", "I trust...").
-The affirmation should:
-1. Be exactly 1 sentence.
-2. Be under 30 words.
-3. Speak directly to their specific struggle and the hope/guidance offered in the response, declaring peace, courage, patience, or strength.
+1. Summarize the core emotional/spiritual intention or struggle behind the user's message.
+2. Summarize the intention and comfort behind the AI's reflection response.
+3. Write a personalized, single, powerful, positive spiritual affirmation in the first person ("I am...", "I choose...", "I trust...").
+4. The affirmation should speak directly to their specific struggle and the hope/guidance offered in the response, declaring peace, courage, patience, or strength.
+5. The affirmation must be exactly 1 sentence and under 30 words.
 
 Respond with ONLY the final affirmation text itself. Do not include any introductory or concluding text, quotation marks, or headers. Just the affirmation.
 `;
