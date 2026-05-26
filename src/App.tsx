@@ -264,46 +264,59 @@ export default function App() {
   // Sync Local / Session Chats to DB on Sign-in
   const syncLocalChatsToDb = async (userId: string) => {
     const localRaw = localStorage.getItem('wwjd_local_chats');
+    console.log("[Auth Debug] syncLocalChatsToDb: localRaw exists =", !!localRaw);
     if (!localRaw) return;
 
     try {
       const localChats: PastChat[] = JSON.parse(localRaw);
+      console.log("[Auth Debug] syncLocalChatsToDb: found local chats =", localChats.length);
       if (localChats.length === 0) return;
 
-      console.log('Migrating local chats to Supabase...');
+      console.log('[Auth Debug] Migrating local chats to Supabase...');
       for (const chat of localChats) {
         // Skip the default welcome message if it has no user messages in it to keep DB clean
         const hasUserMessage = chat.messages.some(m => m.sender === 'user');
         if (!hasUserMessage) continue;
 
-        await supabase.from('chats').insert({
+        console.log('[Auth Debug] migrating chat:', chat.title);
+        const { error } = await supabase.from('chats').insert({
           user_id: userId,
           title: chat.title,
           preview: chat.preview,
           messages: chat.messages,
           created_at: chat.created_at || new Date().toISOString()
         });
+        if (error) {
+          console.error('[Auth Debug] Migration error for chat:', chat.title, error.message);
+        }
       }
 
       // Cleanup local storage
       localStorage.removeItem('wwjd_local_chats');
       showToast("Your offline reflections have been synced!");
     } catch (e) {
-      console.error('Failed to migrate local chats:', e);
+      console.error('[Auth Debug] Failed to migrate local chats:', e);
     }
   };
 
   // Load Chats based on Auth State
   const loadChats = async (currUser: User | null) => {
+    console.log("[Auth Debug] loadChats: currUser exists =", !!currUser);
     if (currUser) {
       // Load user chats from DB
+      console.log("[Auth Debug] loadChats: Querying DB for user chats...");
       const { data, error } = await supabase
         .from('chats')
         .select('*')
         .eq('user_id', currUser.id)
         .order('updated_at', { ascending: false });
 
+      if (error) {
+        console.error("[Auth Debug] loadChats DB query error:", error.message);
+      }
+
       if (!error && data && data.length > 0) {
+        console.log("[Auth Debug] loadChats: found", data.length, "chats in DB");
         const dbChatsList: PastChat[] = data.map(item => ({
           id: item.id,
           title: item.title,
@@ -316,6 +329,7 @@ export default function App() {
         // Set active chat to the most recent one
         setCurrentChatId(dbChatsList[0].id);
       } else {
+        console.log("[Auth Debug] loadChats: no chats found in DB (or error), seeding welcome chat");
         // No chats in DB yet. Create welcome chat
         const defaultChat = getWelcomeChat();
         setChats([defaultChat]);
@@ -323,19 +337,22 @@ export default function App() {
       }
     } else {
       // Load local guest chats
+      console.log("[Auth Debug] loadChats: Querying localStorage for guest chats...");
       const localRaw = localStorage.getItem('wwjd_local_chats');
       if (localRaw) {
         try {
           const localChats: PastChat[] = JSON.parse(localRaw);
           if (localChats.length > 0) {
+            console.log("[Auth Debug] loadChats: found", localChats.length, "guest chats in localStorage");
             setChats(localChats);
             setCurrentChatId(localChats[0].id);
             return;
           }
         } catch (e) {
-          console.error(e);
+          console.error("[Auth Debug] loadChats localStorage parse error:", e);
         }
       }
+      console.log("[Auth Debug] loadChats: no guest chats in localStorage, seeding welcome chat");
       // If none exist, seed welcome chat
       const defaultChat = getWelcomeChat();
       setChats([defaultChat]);
@@ -345,69 +362,58 @@ export default function App() {
 
   // Fetch Public Profile from database
   const fetchProfile = async (userId: string) => {
+    console.log("[Auth Debug] fetchProfile: Querying profile for:", userId);
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single();
-    if (!error && data) {
-      setProfile(data);
+    if (error) {
+      console.error("[Auth Debug] fetchProfile DB error:", error.message);
+    } else {
+      console.log("[Auth Debug] fetchProfile found profile:", data);
+      if (data) {
+        setProfile(data);
+      }
     }
   };
 
   // Initialize Supabase Auth state listener
   useEffect(() => {
+    console.log("[Auth Debug] useEffect run. Registering auth observer...");
     setIsAuthLoading(true);
-    
-    // Check current session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const u = session?.user ?? null;
-      setUser(u);
-      if (u) {
-        try {
-          await fetchProfile(u.id);
-          await syncLocalChatsToDb(u.id);
-          await loadChats(u);
-        } catch (e) {
-          console.error("Failed to load user session data:", e);
-          // Fallback to guest configuration
-          await loadChats(null);
-        }
-      } else {
-        await loadChats(null);
-      }
-      setIsAuthLoading(false);
-    }).catch(e => {
-      console.error("Session check failed:", e);
-      loadChats(null).finally(() => {
-        setIsAuthLoading(false);
-      });
-    });
 
     // Listen to Auth Changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // Note: Supabase's onAuthStateChange automatically resolves the initial session
+    // and fires the INITIAL_SESSION event immediately, making getSession redundant.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("[Auth Debug] onAuthStateChange event received:", event, "hasSession =", !!session);
       setIsAuthLoading(true);
       const u = session?.user ?? null;
       setUser(u);
       try {
         if (u) {
+          console.log("[Auth Debug] User is authenticated. Fetching data...");
           await fetchProfile(u.id);
           await syncLocalChatsToDb(u.id);
           await loadChats(u);
         } else {
+          console.log("[Auth Debug] User is guest. Cleaning up profiles and loading guest chats...");
           setProfile(null);
           await loadChats(null);
         }
       } catch (e) {
-        console.error("Failed to process auth change:", e);
-        // Fallback to guest configuration
+        console.error("[Auth Debug] onAuthStateChange callback exception caught:", e);
+        // Fallback to guest configuration to avoid freezing UI
         await loadChats(null);
       } finally {
+        console.log("[Auth Debug] onAuthStateChange: completing auth loading state");
         setIsAuthLoading(false);
       }
     });
 
     return () => {
+      console.log("[Auth Debug] useEffect cleanup: unsubscribing...");
       subscription.unsubscribe();
     };
   }, []);
