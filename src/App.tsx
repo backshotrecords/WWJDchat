@@ -202,6 +202,7 @@ export default function App() {
   const [chats, setChats] = useState<PastChat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isChatsLoading, setIsChatsLoading] = useState(false);
+  const [isPrayerLoading, setIsPrayerLoading] = useState(false);
 
   // Spiritual Feature Modals State
   const [activeModal, setActiveModal] = useState<'affirmation' | 'verse' | 'prayer' | 'invite' | null>(null);
@@ -597,6 +598,49 @@ export default function App() {
     return { verse: selectedVerse, affirmation: selectedAffirmation, prayer: selectedPrayer };
   };
 
+  const triggerPrayerPrompt = async (messagesList: Message[]) => {
+    setActiveModal('prayer');
+    const hasUserMsg = messagesList.some(m => m.sender === 'user');
+    
+    if (!hasUserMsg) {
+      console.log("[Prayer Debug] No user message found in current chat. Using static fallback.");
+      const content = getSpiritualContent(messagesList);
+      setCardPrayer(content.prayer);
+      setIsPrayerLoading(false);
+      return;
+    }
+
+    setIsPrayerLoading(true);
+    setCardPrayer("Whispering a custom prayer for you...");
+    
+    try {
+      console.log("[Prayer Debug] Sending messages to dynamic prayer prompt API...");
+      const response = await fetch('/api/prayer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messagesList })
+      });
+
+      if (!response.ok) throw new Error(`API returned status ${response.status}`);
+      const data = await response.json();
+      
+      if (data.text) {
+        console.log("[Prayer Debug] Custom prayer prompt received:", data.text);
+        setCardPrayer(data.text);
+      } else {
+        console.warn("[Prayer Debug] API returned null text (likely missing API key), falling back to static.");
+        const content = getSpiritualContent(messagesList);
+        setCardPrayer(content.prayer);
+      }
+    } catch (err) {
+      console.warn("[Prayer Debug] Dynamic prayer fetch failed, falling back to static:", err);
+      const content = getSpiritualContent(messagesList);
+      setCardPrayer(content.prayer);
+    } finally {
+      setIsPrayerLoading(false);
+    }
+  };
+
   // Triggered after a user successfully logs in to run any actions they clicked on as a guest
   const runPendingAction = (_userId: string, targetChats: PastChat[], chatId: string | null) => {
     if (!pendingAction) return;
@@ -616,8 +660,7 @@ export default function App() {
     } else if (pendingAction === "Save Reflection") {
       showToast("Reflection successfully saved to your profile!");
     } else if (pendingAction === "Prayer Prompt") {
-      setCardPrayer(content.prayer);
-      setActiveModal('prayer');
+      triggerPrayerPrompt(currentMessages);
     } else if (pendingAction === "Invite Someone") {
       setActiveModal('invite');
     }
@@ -1008,8 +1051,7 @@ export default function App() {
     } else if (label === "Save Reflection") {
       showToast("Reflection successfully saved to your profile!");
     } else if (label === "Prayer Prompt") {
-      setCardPrayer(content.prayer);
-      setActiveModal('prayer');
+      triggerPrayerPrompt(messages);
     } else if (label === "Invite Someone") {
       setActiveModal('invite');
     }
@@ -1636,21 +1678,33 @@ export default function App() {
                   <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Guided Prayer Prompt</h3>
                   <div className="bg-white/80 backdrop-blur-sm border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner max-h-[180px] overflow-y-auto relative text-left">
                     <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">Spoken Prayer</span>
-                    <p className="text-[14px] text-[#6D6253] leading-relaxed whitespace-pre-line pt-1">
-                      {cardPrayer}
-                    </p>
+                    {isPrayerLoading ? (
+                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                        <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Whispering a custom prayer for you...</p>
+                      </div>
+                    ) : (
+                      <p className="text-[14px] text-[#6D6253] leading-relaxed whitespace-pre-line pt-1">
+                        {cardPrayer}
+                      </p>
+                    )}
                   </div>
                   <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold text-center">
                     Read these words in quiet contemplation, or speak them aloud.
                   </p>
                   <div className="flex space-x-3 pt-2">
                     <button 
+                      disabled={isPrayerLoading}
                       onClick={() => {
                         navigator.clipboard.writeText(cardPrayer || '');
                         showToast("Prayer copied!");
                         setActiveModal(null);
                       }}
-                      className="flex-1 py-3 bg-[#8B7D6B] hover:bg-[#6D6253] text-white text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95"
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
+                        isPrayerLoading 
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#8B7D6B] text-white hover:bg-[#6D6253]'
+                      }`}
                     >
                       Copy Prayer
                     </button>
