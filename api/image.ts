@@ -46,26 +46,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       size: "1024x1024",
     });
 
+    const b64Json = response.data?.[0]?.b64_json;
     const imageUrl = response.data?.[0]?.url;
-    if (!imageUrl) {
-      console.warn("[Image API] OpenAI returned empty image data.");
+
+    if (b64Json) {
+      console.log("[Image API] Image returned as b64_json. Sending directly.");
+      const base64Image = `data:image/png;base64,${b64Json}`;
+      return res.status(200).json({ image: base64Image });
+    } else if (imageUrl) {
+      console.log("[Image API] Image returned as URL. Fetching and proxying as Base64 to bypass CORS...");
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch generated image: ${imageResponse.statusText}`);
+      }
+      const arrayBuffer = await imageResponse.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const base64Image = `data:image/png;base64,${buffer.toString('base64')}`;
+      console.log("[Image API] Base64 conversion successful. Returning response.");
+      return res.status(200).json({ image: base64Image });
+    } else {
+      console.warn("[Image API] OpenAI returned no image data (neither b64_json nor url).");
       return res.status(200).json({ image: null });
     }
-
-    console.log("[Image API] Image generated. Fetching and proxying as Base64 to bypass CORS...");
-
-    // Fetch the image binary and convert to Base64 to prevent Canvas CORS tainting on frontend
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-      throw new Error(`Failed to fetch generated image: ${imageResponse.statusText}`);
-    }
-
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64Image = `data:image/png;base64,${buffer.toString('base64')}`;
-
-    console.log("[Image API] Base64 conversion successful. Returning response.");
-    return res.status(200).json({ image: base64Image });
   } catch (error: any) {
     console.error("[Image API] Error generating image background:", error);
     return res.status(200).json({ image: null, error: error.message || '' });
