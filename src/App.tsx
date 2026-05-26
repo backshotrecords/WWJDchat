@@ -646,6 +646,33 @@ export default function App() {
     return { verse: selectedVerse, affirmation: selectedAffirmation, prayer: selectedPrayer };
   };
 
+  const generateCardBackground = async (text: string, type: 'affirmation' | 'verse' | 'prayer') => {
+    setCardBackground(null);
+    setIsImageGenerating(true);
+    try {
+      console.log(`[Card Preview] Requesting AI background image for ${type}...`);
+      const response = await fetch('/api/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, type })
+      });
+
+      if (!response.ok) throw new Error(`API returned status ${response.status}`);
+      const data = await response.json();
+      if (data.image) {
+        setCardBackground(data.image);
+      } else if (data.error) {
+        console.error("[Card Preview] Image API returned error:", data.error);
+        showToast(`Image gen fallback: ${data.error}`);
+      }
+    } catch (err: any) {
+      console.error("[Card Preview] Image API fetch failed:", err);
+      showToast(`Image gen failed: ${err.message || err}`);
+    } finally {
+      setIsImageGenerating(false);
+    }
+  };
+
   const closeModal = () => {
     setActiveModal(null);
     setCardBackground(null);
@@ -883,6 +910,7 @@ export default function App() {
       const content = getSpiritualContent(messagesList);
       setCardAffirmation(content.affirmation);
       setIsAffirmationLoading(false);
+      generateCardBackground(content.affirmation, 'affirmation');
       return;
     }
 
@@ -900,18 +928,22 @@ export default function App() {
       if (!response.ok) throw new Error(`API returned status ${response.status}`);
       const data = await response.json();
       
+      let finalAffirmation = "";
       if (data.text) {
         console.log("[Affirmation Debug] Custom affirmation prompt received:", data.text);
-        setCardAffirmation(data.text);
+        finalAffirmation = data.text;
       } else {
         console.warn("[Affirmation Debug] API returned null text (likely missing API key), falling back to static.");
         const content = getSpiritualContent(messagesList);
-        setCardAffirmation(content.affirmation);
+        finalAffirmation = content.affirmation;
       }
+      setCardAffirmation(finalAffirmation);
+      generateCardBackground(finalAffirmation, 'affirmation');
     } catch (err) {
       console.warn("[Affirmation Debug] Dynamic affirmation fetch failed, falling back to static:", err);
       const content = getSpiritualContent(messagesList);
       setCardAffirmation(content.affirmation);
+      generateCardBackground(content.affirmation, 'affirmation');
     } finally {
       setIsAffirmationLoading(false);
     }
@@ -932,6 +964,7 @@ export default function App() {
       if (extracted) {
         console.log("[Verse Debug] Successfully extracted verse card:", extracted.reference);
         setCardVerse(extracted);
+        generateCardBackground(extracted.text, 'verse');
         return;
       }
     }
@@ -941,6 +974,7 @@ export default function App() {
     const randomIndex = Math.floor(Math.random() * SCRIPTURE_VERSES.length);
     const randomVerse = SCRIPTURE_VERSES[randomIndex];
     setCardVerse({ reference: randomVerse.reference, text: randomVerse.text });
+    generateCardBackground(randomVerse.text, 'verse');
   };
 
   const triggerPrayerPrompt = async (messagesList: Message[]) => {
@@ -952,6 +986,7 @@ export default function App() {
       const content = getSpiritualContent(messagesList);
       setCardPrayer(content.prayer);
       setIsPrayerLoading(false);
+      generateCardBackground(content.prayer, 'prayer');
       return;
     }
 
@@ -969,18 +1004,22 @@ export default function App() {
       if (!response.ok) throw new Error(`API returned status ${response.status}`);
       const data = await response.json();
       
+      let finalPrayer = "";
       if (data.text) {
         console.log("[Prayer Debug] Custom prayer prompt received:", data.text);
-        setCardPrayer(data.text);
+        finalPrayer = data.text;
       } else {
         console.warn("[Prayer Debug] API returned null text (likely missing API key), falling back to static.");
         const content = getSpiritualContent(messagesList);
-        setCardPrayer(content.prayer);
+        finalPrayer = content.prayer;
       }
+      setCardPrayer(finalPrayer);
+      generateCardBackground(finalPrayer, 'prayer');
     } catch (err) {
       console.warn("[Prayer Debug] Dynamic prayer fetch failed, falling back to static:", err);
       const content = getSpiritualContent(messagesList);
       setCardPrayer(content.prayer);
+      generateCardBackground(content.prayer, 'prayer');
     } finally {
       setIsPrayerLoading(false);
     }
@@ -1958,6 +1997,12 @@ export default function App() {
                     className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[120px] flex items-center justify-center text-center transition-all duration-300"
                     style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
                   >
+                    {isImageGenerating && (
+                      <div className="absolute inset-0 bg-[#FAF5EF]/90 backdrop-blur-[1px] flex flex-col items-center justify-center space-y-2 z-20">
+                        <div className="w-5 h-5 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-[10px] text-[#8B7D6B] font-medium animate-pulse">Creating background art...</p>
+                      </div>
+                    )}
                     {cardBackground && (
                       <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
                     )}
@@ -2027,6 +2072,12 @@ export default function App() {
                     className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[120px] flex items-center justify-center text-center transition-all duration-300"
                     style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
                   >
+                    {isImageGenerating && (
+                      <div className="absolute inset-0 bg-[#FAF5EF]/90 backdrop-blur-[1px] flex flex-col items-center justify-center space-y-2 z-20">
+                        <div className="w-5 h-5 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-[10px] text-[#8B7D6B] font-medium animate-pulse">Creating background art...</p>
+                      </div>
+                    )}
                     {cardBackground && (
                       <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
                     )}
@@ -2089,6 +2140,12 @@ export default function App() {
                     className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[140px] max-h-[180px] overflow-y-auto text-left transition-all duration-300"
                     style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
                   >
+                    {isImageGenerating && (
+                      <div className="absolute inset-0 bg-[#FAF5EF]/90 backdrop-blur-[1px] flex flex-col items-center justify-center space-y-2 z-20">
+                        <div className="w-5 h-5 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-[10px] text-[#8B7D6B] font-medium animate-pulse">Creating background art...</p>
+                      </div>
+                    )}
                     {cardBackground && (
                       <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
                     )}
