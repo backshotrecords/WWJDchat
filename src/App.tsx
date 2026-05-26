@@ -222,6 +222,47 @@ export default function App() {
   const audioChunks = useRef<Blob[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Touch Swipe Gesture State for Sidebar Toggle
+  const touchStartX = useRef<number>(0);
+  const touchStartY = useRef<number>(0);
+  const swipeThreshold = 50; // Minimum swipe distance in pixels
+  const verticalThreshold = 40; // Maximum vertical movement permitted to qualify as horizontal swipe
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement;
+    // Don't trigger sidebar swipe gestures if touch starts within input elements
+    if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.closest('form')) {
+      touchStartX.current = 0;
+      touchStartY.current = 0;
+      return;
+    }
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === 0) return; // Started on ignored input
+
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    
+    const deltaX = touchEndX - touchStartX.current;
+    const deltaY = touchEndY - touchStartY.current;
+
+    // Predominantly horizontal swipe validation
+    if (Math.abs(deltaX) > swipeThreshold && Math.abs(deltaY) < verticalThreshold) {
+      if (deltaX > 0) {
+        // Swipe Left to Right -> open sidebar
+        console.log("[Gesture Debug] Left to Right swipe - opening sidebar");
+        setIsSidebarOpen(true);
+      } else {
+        // Swipe Right to Left -> close sidebar
+        console.log("[Gesture Debug] Right to Left swipe - closing sidebar");
+        setIsSidebarOpen(false);
+      }
+    }
+  };
+
   // Utility Date Formatter
   const formatChatDate = (dateStr?: string) => {
     if (!dateStr) return 'Today';
@@ -996,7 +1037,7 @@ export default function App() {
       )}
 
       {/* Mobile App Frame constraint */}
-      <div className="flex flex-col w-full h-full max-w-md bg-[#FAF8F5] sm:h-[800px] sm:max-h-[90dvh] sm:rounded-[40px] shadow-2xl overflow-hidden relative border border-[#E5E0D8]">
+      <div className="flex flex-col w-full h-full max-w-md bg-[#FAF8F5] sm:h-[800px] sm:max-h-[90dvh] sm:rounded-[40px] shadow-2xl overflow-hidden relative border border-[#E5E0D8]" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         
         {/* Global Overlay to close menu when clicking outside */}
         <div 
