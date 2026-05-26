@@ -248,6 +248,7 @@ export default function App() {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isChatsLoading, setIsChatsLoading] = useState(false);
   const [isPrayerLoading, setIsPrayerLoading] = useState(false);
+  const [isAffirmationLoading, setIsAffirmationLoading] = useState(false);
 
   // Spiritual Feature Modals State
   const [activeModal, setActiveModal] = useState<'affirmation' | 'verse' | 'prayer' | 'invite' | null>(null);
@@ -643,6 +644,49 @@ export default function App() {
     return { verse: selectedVerse, affirmation: selectedAffirmation, prayer: selectedPrayer };
   };
 
+  const triggerAffirmationPrompt = async (messagesList: Message[]) => {
+    setActiveModal('affirmation');
+    const hasUserMsg = messagesList.some(m => m.sender === 'user');
+    
+    if (!hasUserMsg) {
+      console.log("[Affirmation Debug] No user message found in current chat. Using static fallback.");
+      const content = getSpiritualContent(messagesList);
+      setCardAffirmation(content.affirmation);
+      setIsAffirmationLoading(false);
+      return;
+    }
+
+    setIsAffirmationLoading(true);
+    setCardAffirmation("Reflecting on a custom affirmation for you...");
+    
+    try {
+      console.log("[Affirmation Debug] Sending messages to dynamic affirmation prompt API...");
+      const response = await fetch('/api/affirmation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: messagesList })
+      });
+
+      if (!response.ok) throw new Error(`API returned status ${response.status}`);
+      const data = await response.json();
+      
+      if (data.text) {
+        console.log("[Affirmation Debug] Custom affirmation prompt received:", data.text);
+        setCardAffirmation(data.text);
+      } else {
+        console.warn("[Affirmation Debug] API returned null text (likely missing API key), falling back to static.");
+        const content = getSpiritualContent(messagesList);
+        setCardAffirmation(content.affirmation);
+      }
+    } catch (err) {
+      console.warn("[Affirmation Debug] Dynamic affirmation fetch failed, falling back to static:", err);
+      const content = getSpiritualContent(messagesList);
+      setCardAffirmation(content.affirmation);
+    } finally {
+      setIsAffirmationLoading(false);
+    }
+  };
+
   const triggerVerseCard = (messagesList: Message[]) => {
     setActiveModal('verse');
 
@@ -720,11 +764,8 @@ export default function App() {
     const targetChat = targetChats.find(c => c.id === chatId) || targetChats[0];
     const currentMessages = targetChat ? targetChat.messages : [];
 
-    const content = getSpiritualContent(currentMessages);
-
     if (pendingAction === "Create Affirmation") {
-      setCardAffirmation(content.affirmation);
-      setActiveModal('affirmation');
+      triggerAffirmationPrompt(currentMessages);
     } else if (pendingAction === "Create Verse Card") {
       triggerVerseCard(currentMessages);
     } else if (pendingAction === "Save Reflection") {
@@ -1110,11 +1151,9 @@ export default function App() {
     }
 
     // Executing protected features when logged in
-    const content = getSpiritualContent(messages);
 
     if (label === "Create Affirmation") {
-      setCardAffirmation(content.affirmation);
-      setActiveModal('affirmation');
+      triggerAffirmationPrompt(messages);
     } else if (label === "Create Verse Card") {
       triggerVerseCard(messages);
     } else if (label === "Save Reflection") {
@@ -1687,21 +1726,33 @@ export default function App() {
                   <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Heavenly Affirmation</h3>
                   <div className="bg-white/80 backdrop-blur-sm border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative">
                     <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">I am guided</span>
-                    <p className="text-[15px] italic text-[#6D6253] leading-relaxed font-serif pt-1">
-                      "{cardAffirmation}"
-                    </p>
+                    {isAffirmationLoading ? (
+                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                        <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Reflecting on a custom affirmation for you...</p>
+                      </div>
+                    ) : (
+                      <p className="text-[15px] italic text-[#6D6253] leading-relaxed font-serif pt-1">
+                        "{cardAffirmation}"
+                      </p>
+                    )}
                   </div>
                   <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
                     Let this truth sink into your spirit today.
                   </p>
                   <div className="flex space-x-3 pt-2">
                     <button 
+                      disabled={isAffirmationLoading}
                       onClick={() => {
                         navigator.clipboard.writeText(cardAffirmation || '');
                         showToast("Affirmation copied!");
                         setActiveModal(null);
                       }}
-                      className="flex-1 py-3 bg-[#8B7D6B] hover:bg-[#6D6253] text-white text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95"
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
+                        isAffirmationLoading 
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#8B7D6B] text-white hover:bg-[#6D6253]'
+                      }`}
                     >
                       Copy Affirmation
                     </button>
