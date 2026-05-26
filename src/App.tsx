@@ -201,6 +201,7 @@ export default function App() {
   // Chats Data State
   const [chats, setChats] = useState<PastChat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [isChatsLoading, setIsChatsLoading] = useState(false);
 
   // Spiritual Feature Modals State
   const [activeModal, setActiveModal] = useState<'affirmation' | 'verse' | 'prayer' | 'invite' | null>(null);
@@ -302,61 +303,69 @@ export default function App() {
   // Load Chats based on Auth State
   const loadChats = async (currUser: User | null) => {
     console.log("[Auth Debug] loadChats: currUser exists =", !!currUser);
-    if (currUser) {
-      // Load user chats from DB
-      console.log("[Auth Debug] loadChats: Querying DB for user chats...");
-      const { data, error } = await supabase
-        .from('chats')
-        .select('*')
-        .eq('user_id', currUser.id)
-        .order('updated_at', { ascending: false });
+    setIsChatsLoading(true);
+    try {
+      if (currUser) {
+        // Load user chats from DB
+        console.log("[Auth Debug] loadChats: Querying DB for user chats...");
+        const { data, error } = await supabase
+          .from('chats')
+          .select('*')
+          .eq('user_id', currUser.id)
+          .order('updated_at', { ascending: false });
 
-      if (error) {
-        console.error("[Auth Debug] loadChats DB query error:", error.message);
-      }
+        if (error) {
+          console.error("[Auth Debug] loadChats DB query error:", error.message);
+        }
 
-      if (!error && data && data.length > 0) {
-        console.log("[Auth Debug] loadChats: found", data.length, "chats in DB");
-        const dbChatsList: PastChat[] = data.map(item => ({
-          id: item.id,
-          title: item.title,
-          preview: item.preview,
-          messages: item.messages,
-          date: formatChatDate(item.updated_at || item.created_at),
-          created_at: item.created_at
-        }));
-        setChats(dbChatsList);
-        // Set active chat to the most recent one
-        setCurrentChatId(dbChatsList[0].id);
+        if (!error && data && data.length > 0) {
+          console.log("[Auth Debug] loadChats: found", data.length, "chats in DB");
+          const dbChatsList: PastChat[] = data.map(item => ({
+            id: item.id,
+            title: item.title,
+            preview: item.preview,
+            messages: item.messages,
+            date: formatChatDate(item.updated_at || item.created_at),
+            created_at: item.created_at
+          }));
+          setChats(dbChatsList);
+          // Set active chat to the most recent one
+          setCurrentChatId(dbChatsList[0].id);
+        } else {
+          console.log("[Auth Debug] loadChats: no chats found in DB (or error), seeding welcome chat");
+          // No chats in DB yet. Create welcome chat
+          const defaultChat = getWelcomeChat();
+          setChats([defaultChat]);
+          setCurrentChatId(defaultChat.id);
+        }
       } else {
-        console.log("[Auth Debug] loadChats: no chats found in DB (or error), seeding welcome chat");
-        // No chats in DB yet. Create welcome chat
+        // Load local guest chats
+        console.log("[Auth Debug] loadChats: Querying localStorage for guest chats...");
+        const localRaw = localStorage.getItem('wwjd_local_chats');
+        if (localRaw) {
+          try {
+            const localChats: PastChat[] = JSON.parse(localRaw);
+            if (localChats.length > 0) {
+              console.log("[Auth Debug] loadChats: found", localChats.length, "guest chats in localStorage");
+              setChats(localChats);
+              setCurrentChatId(localChats[0].id);
+              return;
+            }
+          } catch (e) {
+            console.error("[Auth Debug] loadChats localStorage parse error:", e);
+          }
+        }
+        console.log("[Auth Debug] loadChats: no guest chats in localStorage, seeding welcome chat");
+        // If none exist, seed welcome chat
         const defaultChat = getWelcomeChat();
         setChats([defaultChat]);
         setCurrentChatId(defaultChat.id);
       }
-    } else {
-      // Load local guest chats
-      console.log("[Auth Debug] loadChats: Querying localStorage for guest chats...");
-      const localRaw = localStorage.getItem('wwjd_local_chats');
-      if (localRaw) {
-        try {
-          const localChats: PastChat[] = JSON.parse(localRaw);
-          if (localChats.length > 0) {
-            console.log("[Auth Debug] loadChats: found", localChats.length, "guest chats in localStorage");
-            setChats(localChats);
-            setCurrentChatId(localChats[0].id);
-            return;
-          }
-        } catch (e) {
-          console.error("[Auth Debug] loadChats localStorage parse error:", e);
-        }
-      }
-      console.log("[Auth Debug] loadChats: no guest chats in localStorage, seeding welcome chat");
-      // If none exist, seed welcome chat
-      const defaultChat = getWelcomeChat();
-      setChats([defaultChat]);
-      setCurrentChatId(defaultChat.id);
+    } catch (e) {
+      console.error("[Auth Debug] loadChats exception caught:", e);
+    } finally {
+      setIsChatsLoading(false);
+      console.log("[Auth Debug] loadChats: completed loading state");
     }
   };
 
@@ -391,29 +400,36 @@ export default function App() {
     // and fires the INITIAL_SESSION event immediately, making getSession redundant.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log("[Auth Debug] onAuthStateChange event received:", event, "hasSession =", !!session);
-      setIsAuthLoading(true);
+      
       const u = session?.user ?? null;
       setUser(u);
+      
       try {
         if (u) {
-          console.log("[Auth Debug] User is authenticated. Fetching data...");
-          // Fetch profile in the background (non-blocking)
+          console.log("[Auth Debug] User is authenticated. Fetching database records in background...");
+          // Run these asynchronously without awaiting them, so the loading splash screen is released immediately
           fetchProfile(u.id).catch(err => {
             console.error("[Auth Debug] fetchProfile background task error:", err);
           });
-          await syncLocalChatsToDb(u.id);
-          await loadChats(u);
+          syncLocalChatsToDb(u.id).catch(err => {
+            console.error("[Auth Debug] syncLocalChatsToDb background task error:", err);
+          });
+          loadChats(u).catch(err => {
+            console.error("[Auth Debug] loadChats background task error:", err);
+          });
         } else {
-          console.log("[Auth Debug] User is guest. Cleaning up profiles and loading guest chats...");
+          console.log("[Auth Debug] User is guest. Cleaning up profile and loading guest chats...");
           setProfile(null);
-          await loadChats(null);
+          loadChats(null).catch(err => {
+            console.error("[Auth Debug] loadChats background task error (guest):", err);
+          });
         }
       } catch (e) {
         console.error("[Auth Debug] onAuthStateChange callback exception caught:", e);
         // Fallback to guest configuration to avoid freezing UI
-        await loadChats(null);
+        loadChats(null).catch(err => console.error(err));
       } finally {
-        console.log("[Auth Debug] onAuthStateChange: completing auth loading state");
+        console.log("[Auth Debug] onAuthStateChange: releasing initial auth load screen");
         setIsAuthLoading(false);
       }
     });
@@ -1004,6 +1020,12 @@ export default function App() {
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-[#FAF8F5] to-[#EFECE6]/30">
+            {isChatsLoading && (
+              <div className="flex items-center justify-center space-x-2 py-3 text-[#8B7D6B] animate-pulse">
+                <div className="w-3.5 h-3.5 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                <span className="text-[11px] font-semibold uppercase tracking-wider">Syncing reflections...</span>
+              </div>
+            )}
             {chats.map((chat) => (
               <button 
                 key={chat.id}
