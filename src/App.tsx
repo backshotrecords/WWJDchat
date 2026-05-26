@@ -179,6 +179,51 @@ const getWelcomeChat = (): PastChat => ({
   created_at: new Date().toISOString()
 });
 
+// Extract a Bible verse and reference from AI response text
+const extractVerseFromAiResponse = (text: string) => {
+  const books = [
+    'Genesis', 'Exodus', 'Leviticus', 'Numbers', 'Deuteronomy', 'Joshua', 'Judges', 'Ruth', 
+    '1 Samuel', '2 Samuel', '1 Kings', '2 Kings', '1 Chronicles', '2 Chronicles', 'Ezra', 
+    'Nehemiah', 'Esther', 'Job', 'Psalms', 'Psalm', 'Proverbs', 'Ecclesiastes', 'Song of Solomon', 
+    'Isaiah', 'Jeremiah', 'Lamentations', 'Ezekiel', 'Daniel', 'Hosea', 'Joel', 'Amos', 
+    'Obadiah', 'Jonah', 'Micah', 'Nahum', 'Habakkuk', 'Zephaniah', 'Haggai', 'Zechariah', 
+    'Malachi', 'Matthew', 'Mark', 'Luke', 'John', 'Acts', 'Romans', '1|2 Corinthians', '1 Corinthians', 
+    '2 Corinthians', 'Galatians', 'Ephesians', 'Philippians', 'Colossians', '1 Thessalonians', 
+    '2 Thessalonians', '1 Timothy', '2 Timothy', 'Titus', 'Philemon', 'Hebrews', 'James', 
+    '1 Peter', '2 Peter', '1 John', '2 John', '3 John', 'Jude', 'Revelation'
+  ];
+
+  // Regex to match book name followed by chapter:verse (and optional range)
+  const refRegex = new RegExp('\\b(' + books.join('|') + ')\\s+\\d+:\\d+(?:-\\d+)?\\b', 'i');
+  const refMatch = text.match(refRegex);
+
+  if (!refMatch) return null;
+
+  const reference = refMatch[0];
+
+  // Locate quoted content (between 15 and 250 characters)
+  const quoteRegex = /["'“«]([^"'”»]{15,250})["'”»]/;
+  const quoteMatch = text.match(quoteRegex);
+
+  let verseText = '';
+  if (quoteMatch && quoteMatch[1]) {
+    verseText = quoteMatch[1].trim();
+  } else {
+    // If no quotes found, attempt lookup in our pre-defined SCRIPTURE_VERSES list
+    const foundInDb = SCRIPTURE_VERSES.find(v => 
+      v.reference.toLowerCase().includes(reference.toLowerCase()) || 
+      reference.toLowerCase().includes(v.reference.toLowerCase())
+    );
+    if (foundInDb) {
+      verseText = foundInDb.text;
+    } else {
+      verseText = `Please refer to this scripture reference for comfort and guidance.`;
+    }
+  }
+
+  return { reference, text: verseText };
+};
+
 export default function App() {
   // Navigation & Sidebars
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -598,6 +643,32 @@ export default function App() {
     return { verse: selectedVerse, affirmation: selectedAffirmation, prayer: selectedPrayer };
   };
 
+  const triggerVerseCard = (messagesList: Message[]) => {
+    setActiveModal('verse');
+
+    // Find the last AI message (excluding welcome chat if other messages exist)
+    const aiMessages = messagesList.filter(m => m.sender === 'ai');
+    
+    // If the only message is the welcome message, treat it as empty response
+    const lastAiMessage = aiMessages.length > 1 ? aiMessages[aiMessages.length - 1] : null;
+
+    if (lastAiMessage) {
+      console.log("[Verse Debug] Scanning last AI response for scripture verse reference...");
+      const extracted = extractVerseFromAiResponse(lastAiMessage.text);
+      if (extracted) {
+        console.log("[Verse Debug] Successfully extracted verse card:", extracted.reference);
+        setCardVerse(extracted);
+        return;
+      }
+    }
+
+    // Fallback: Choose a random verse from SCRIPTURE_VERSES
+    console.log("[Verse Debug] No verse found in AI response (or new chat). Selecting a random verse fallback.");
+    const randomIndex = Math.floor(Math.random() * SCRIPTURE_VERSES.length);
+    const randomVerse = SCRIPTURE_VERSES[randomIndex];
+    setCardVerse({ reference: randomVerse.reference, text: randomVerse.text });
+  };
+
   const triggerPrayerPrompt = async (messagesList: Message[]) => {
     setActiveModal('prayer');
     const hasUserMsg = messagesList.some(m => m.sender === 'user');
@@ -655,8 +726,7 @@ export default function App() {
       setCardAffirmation(content.affirmation);
       setActiveModal('affirmation');
     } else if (pendingAction === "Create Verse Card") {
-      setCardVerse(content.verse);
-      setActiveModal('verse');
+      triggerVerseCard(currentMessages);
     } else if (pendingAction === "Save Reflection") {
       showToast("Reflection successfully saved to your profile!");
     } else if (pendingAction === "Prayer Prompt") {
@@ -1046,8 +1116,7 @@ export default function App() {
       setCardAffirmation(content.affirmation);
       setActiveModal('affirmation');
     } else if (label === "Create Verse Card") {
-      setCardVerse(content.verse);
-      setActiveModal('verse');
+      triggerVerseCard(messages);
     } else if (label === "Save Reflection") {
       showToast("Reflection successfully saved to your profile!");
     } else if (label === "Prayer Prompt") {
