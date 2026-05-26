@@ -363,18 +363,21 @@ export default function App() {
   // Fetch Public Profile from database
   const fetchProfile = async (userId: string) => {
     console.log("[Auth Debug] fetchProfile: Querying profile for:", userId);
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    if (error) {
-      console.error("[Auth Debug] fetchProfile DB error:", error.message);
-    } else {
-      console.log("[Auth Debug] fetchProfile found profile:", data);
-      if (data) {
-        setProfile(data);
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId);
+      if (error) {
+        console.error("[Auth Debug] fetchProfile DB error:", error.message);
+      } else if (data && data.length > 0) {
+        console.log("[Auth Debug] fetchProfile found profile:", data[0]);
+        setProfile(data[0] as UserProfile);
+      } else {
+        console.log("[Auth Debug] fetchProfile: no profile row found in DB");
       }
+    } catch (err) {
+      console.error("[Auth Debug] fetchProfile exception caught:", err);
     }
   };
 
@@ -394,7 +397,10 @@ export default function App() {
       try {
         if (u) {
           console.log("[Auth Debug] User is authenticated. Fetching data...");
-          await fetchProfile(u.id);
+          // Fetch profile in the background (non-blocking)
+          fetchProfile(u.id).catch(err => {
+            console.error("[Auth Debug] fetchProfile background task error:", err);
+          });
           await syncLocalChatsToDb(u.id);
           await loadChats(u);
         } else {
