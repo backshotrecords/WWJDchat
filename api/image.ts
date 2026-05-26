@@ -40,10 +40,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     // Generate image
     const response = await openai.images.generate({
-      model: "dall-e-3",
+      model: "gpt-image-2",
       prompt: themePrompt,
       n: 1,
-      size: "1024x1024",
+      size: "512x512",
     });
 
     const imageUrl = response.data?.[0]?.url;
