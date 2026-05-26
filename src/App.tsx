@@ -360,31 +360,51 @@ export default function App() {
     setIsAuthLoading(true);
     
     // Check current session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       const u = session?.user ?? null;
       setUser(u);
       if (u) {
-        fetchProfile(u.id);
-        syncLocalChatsToDb(u.id).then(() => loadChats(u));
+        try {
+          await fetchProfile(u.id);
+          await syncLocalChatsToDb(u.id);
+          await loadChats(u);
+        } catch (e) {
+          console.error("Failed to load user session data:", e);
+          // Fallback to guest configuration
+          await loadChats(null);
+        }
       } else {
-        loadChats(null);
+        await loadChats(null);
       }
       setIsAuthLoading(false);
+    }).catch(e => {
+      console.error("Session check failed:", e);
+      loadChats(null).finally(() => {
+        setIsAuthLoading(false);
+      });
     });
 
     // Listen to Auth Changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setIsAuthLoading(true);
       const u = session?.user ?? null;
       setUser(u);
-      if (u) {
-        await fetchProfile(u.id);
-        await syncLocalChatsToDb(u.id);
-        await loadChats(u);
-      } else {
-        setProfile(null);
+      try {
+        if (u) {
+          await fetchProfile(u.id);
+          await syncLocalChatsToDb(u.id);
+          await loadChats(u);
+        } else {
+          setProfile(null);
+          await loadChats(null);
+        }
+      } catch (e) {
+        console.error("Failed to process auth change:", e);
+        // Fallback to guest configuration
         await loadChats(null);
+      } finally {
+        setIsAuthLoading(false);
       }
-      setIsAuthLoading(false);
     });
 
     return () => {
@@ -406,52 +426,60 @@ export default function App() {
       }
     }
 
-    if (user) {
-      // Update in Supabase
-      // If the chat is the temporary local welcome chat ('c-welcome'), we need to insert it instead!
-      if (chatId === 'c-welcome') {
-        const { data, error } = await supabase
-          .from('chats')
-          .insert({
-            user_id: user.id,
-            title: updatedTitle,
-            preview: previewText,
-            messages: updatedMessages
-          })
-          .select()
-          .single();
-        if (!error && data) {
-          // Replace local welcome chat with database row
-          setChats(prev => prev.map(c => c.id === 'c-welcome' ? {
-            id: data.id,
-            title: data.title,
-            preview: data.preview,
-            messages: data.messages,
-            date: 'Today',
-            created_at: data.created_at
-          } : c));
-          setCurrentChatId(data.id);
-        }
-      } else {
-        // Standard update
-        await supabase
-          .from('chats')
-          .update({
-            title: updatedTitle,
-            preview: previewText,
-            messages: updatedMessages,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', chatId);
+    // Always update local state first so UI is immediately responsive
+    setChats(prev => prev.map(c => c.id === chatId ? {
+      ...c,
+      title: updatedTitle,
+      preview: previewText,
+      messages: updatedMessages,
+      date: 'Today'
+    } : c));
 
-        // Update local state list
-        setChats(prev => prev.map(c => c.id === chatId ? {
-          ...c,
-          title: updatedTitle,
-          preview: previewText,
-          messages: updatedMessages,
-          date: 'Today'
-        } : c));
+    if (user) {
+      try {
+        // If the chat is the temporary local welcome chat ('c-welcome'), we need to insert it instead!
+        if (chatId === 'c-welcome') {
+          const { data, error } = await supabase
+            .from('chats')
+            .insert({
+              user_id: user.id,
+              title: updatedTitle,
+              preview: previewText,
+              messages: updatedMessages
+            })
+            .select()
+            .single();
+          if (!error && data) {
+            // Replace local welcome chat with database row
+            setChats(prev => prev.map(c => c.id === 'c-welcome' ? {
+              id: data.id,
+              title: data.title,
+              preview: data.preview,
+              messages: data.messages,
+              date: 'Today',
+              created_at: data.created_at
+            } : c));
+            setCurrentChatId(data.id);
+          } else if (error) {
+            console.error("Error creating chat in DB:", error);
+          }
+        } else {
+          // Standard update
+          const { error } = await supabase
+            .from('chats')
+            .update({
+              title: updatedTitle,
+              preview: previewText,
+              messages: updatedMessages,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', chatId);
+          if (error) {
+            console.error("Error updating chat in DB:", error);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to sync chat to DB:", err);
       }
     } else {
       // Update in Local Storage for guest
@@ -462,8 +490,6 @@ export default function App() {
         messages: updatedMessages,
         date: 'Today'
       } : c);
-
-      setChats(updatedChatsList);
       localStorage.setItem('wwjd_local_chats', JSON.stringify(updatedChatsList));
     }
   };
