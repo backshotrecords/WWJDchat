@@ -255,6 +255,8 @@ export default function App() {
   const [cardVerse, setCardVerse] = useState<{ reference: string; text: string } | null>(null);
   const [cardAffirmation, setCardAffirmation] = useState<string | null>(null);
   const [cardPrayer, setCardPrayer] = useState<string | null>(null);
+  const [cardBackground, setCardBackground] = useState<string | null>(null);
+  const [isImageGenerating, setIsImageGenerating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Chat input and audio states
@@ -642,6 +644,234 @@ export default function App() {
     }
     
     return { verse: selectedVerse, affirmation: selectedAffirmation, prayer: selectedPrayer };
+  };
+
+  const closeModal = () => {
+    setActiveModal(null);
+    setCardBackground(null);
+  };
+
+  const downloadCardImage = async (
+    type: 'affirmation' | 'verse' | 'prayer',
+    titleText: string,
+    bodyText: string,
+    subtitleText?: string
+  ) => {
+    if (isImageGenerating) return;
+
+    let currentBg = cardBackground;
+
+    // Fetch dynamic background from api if not loaded
+    if (!currentBg) {
+      setIsImageGenerating(true);
+      try {
+        console.log(`[Card Download] Requesting AI background image for ${type}...`);
+        const response = await fetch('/api/image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: bodyText, type })
+        });
+
+        if (!response.ok) throw new Error(`API error: ${response.status}`);
+        const data = await response.json();
+        if (data.image) {
+          currentBg = data.image;
+          setCardBackground(data.image); // Display in modal background too
+        } else {
+          console.warn("[Card Download] API returned no image, falling back to gradient.");
+        }
+      } catch (err) {
+        console.error("[Card Download] Failed to fetch dynamic background:", err);
+      } finally {
+        setIsImageGenerating(false);
+      }
+    }
+
+    // Render Canvas
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1080;
+      canvas.height = 1080;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error("Could not get 2D canvas context");
+
+      // Draw background image or gradient fallback
+      if (currentBg) {
+        await new Promise<void>((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous'; // Avoid security exceptions on standard URL proxying
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, 1080, 1080);
+            resolve();
+          };
+          img.onerror = (e) => {
+            console.error("Failed to load background image on canvas", e);
+            reject(e);
+          };
+          img.src = currentBg;
+        });
+      } else {
+        const grad = ctx.createLinearGradient(0, 0, 0, 1080);
+        if (type === 'affirmation') {
+          grad.addColorStop(0, '#FAF5EF');
+          grad.addColorStop(1, '#E6DCD0');
+        } else if (type === 'verse') {
+          grad.addColorStop(0, '#FAF5EF');
+          grad.addColorStop(1, '#D0DFE6');
+        } else {
+          grad.addColorStop(0, '#FAF5EF');
+          grad.addColorStop(1, '#DFD0E6');
+        }
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 1080, 1080);
+      }
+
+      // Draw frosted glass card overlay (centered)
+      const cardX = 80;
+      const cardY = 80;
+      const cardW = 920;
+      const cardH = 920;
+      const radius = 48;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cardX + radius, cardY);
+      ctx.lineTo(cardX + cardW - radius, cardY);
+      ctx.quadraticCurveTo(cardX + cardW, cardY, cardX + cardW, cardY + radius);
+      ctx.lineTo(cardX + cardW, cardY + cardH - radius);
+      ctx.quadraticCurveTo(cardX + cardW, cardY + cardH, cardX + cardW - radius, cardY + cardH);
+      ctx.lineTo(cardX + radius, cardY + cardH);
+      ctx.quadraticCurveTo(cardX, cardY + cardH, cardX, cardY + cardH - radius);
+      ctx.lineTo(cardX, cardY + radius);
+      ctx.quadraticCurveTo(cardX, cardY, cardX + radius, cardY);
+      ctx.closePath();
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.90)';
+      ctx.fill();
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.stroke();
+      ctx.restore();
+
+      // Text configurations
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // 1. Title
+      ctx.font = 'bold 22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = '#8B7D6B';
+      if ('letterSpacing' in ctx) {
+        (ctx as any).letterSpacing = '4px';
+      }
+      ctx.fillText(titleText.toUpperCase(), 540, 185);
+
+      // Reset letter spacing for subsequent text
+      if ('letterSpacing' in ctx) {
+        (ctx as any).letterSpacing = 'normal';
+      }
+
+      // 2. Subtitle Badge (scripture reference or short phrase)
+      if (subtitleText) {
+        ctx.save();
+        ctx.font = 'bold 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        const badgeText = subtitleText.toUpperCase();
+        const textWidth = ctx.measureText(badgeText).width;
+        const badgeW = textWidth + 24;
+        const badgeH = 32;
+        const badgeX = 540 - badgeW / 2;
+        const badgeY = 245 - badgeH / 2;
+        const bRad = 8;
+        
+        ctx.beginPath();
+        ctx.moveTo(badgeX + bRad, badgeY);
+        ctx.lineTo(badgeX + badgeW - bRad, badgeY);
+        ctx.quadraticCurveTo(badgeX + badgeW, badgeY, badgeX + badgeW, badgeY + bRad);
+        ctx.lineTo(badgeX + badgeW, badgeY + badgeH - bRad);
+        ctx.quadraticCurveTo(badgeX + badgeW, badgeY + badgeH, badgeX + badgeW - bRad, badgeY + badgeH);
+        ctx.lineTo(badgeX + bRad, badgeY + badgeH);
+        ctx.quadraticCurveTo(badgeX, badgeY + badgeH, badgeX, badgeY + badgeH - bRad);
+        ctx.lineTo(badgeX, badgeY + bRad);
+        ctx.quadraticCurveTo(badgeX, badgeY, badgeX + bRad, badgeY);
+        ctx.closePath();
+        
+        ctx.fillStyle = '#8B7D6B';
+        ctx.fill();
+        
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(badgeText, 540, 245);
+        ctx.restore();
+      }
+
+      // 3. Body Text (Georgia serif with auto-sizing and wrapping)
+      let fontSize = 38;
+      let lineHeight = 56;
+      if (bodyText.length > 200) {
+        fontSize = 28;
+        lineHeight = 44;
+      } else if (bodyText.length > 100) {
+        fontSize = 33;
+        lineHeight = 50;
+      }
+
+      ctx.font = `italic ${fontSize}px Georgia, serif`;
+      ctx.fillStyle = '#4A4036';
+
+      const cleanText = bodyText.replace(/^"|"$/g, '').trim();
+      const words = cleanText.split(' ');
+      let line = '';
+      const lines: string[] = [];
+      const maxWidth = 760;
+
+      for (let n = 0; n < words.length; n++) {
+        const testLine = line + words[n] + ' ';
+        ctx.font = `italic ${fontSize}px Georgia, serif`;
+        const metrics = ctx.measureText(testLine);
+        const testWidth = metrics.width;
+        if (testWidth > maxWidth && n > 0) {
+          lines.push(line);
+          line = words[n] + ' ';
+        } else {
+          line = testLine;
+        }
+      }
+      lines.push(line);
+
+      // Draw lines centered vertically
+      const contentCenterY = 530;
+      const totalTextHeight = lines.length * lineHeight;
+      let textStartY = contentCenterY - totalTextHeight / 2 + lineHeight / 2;
+
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i].trim(), 540, textStartY);
+        textStartY += lineHeight;
+      }
+
+      // 4. Footer Branding
+      ctx.beginPath();
+      ctx.moveTo(490, 850);
+      ctx.lineTo(590, 850);
+      ctx.strokeStyle = '#E5E0D8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.font = 'bold 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.fillStyle = '#A69C8E';
+      if ('letterSpacing' in ctx) {
+        (ctx as any).letterSpacing = '3px';
+      }
+      ctx.fillText("WWJDCHAT.APP", 540, 890);
+
+      // Programmatic Download link
+      const link = document.createElement('a');
+      link.download = `WWJD_${type}_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      showToast("Card downloaded successfully!");
+    } catch (error) {
+      console.error("[Card Download] Canvas drawing error:", error);
+      showToast("Failed to render card image.");
+    }
   };
 
   const triggerAffirmationPrompt = async (messagesList: Message[]) => {
@@ -1709,7 +1939,7 @@ export default function App() {
             <div className="w-full max-w-sm bg-gradient-to-tr from-[#FAF5EF] via-[#FDFBF7] to-[#F5EFE6] rounded-[32px] border border-[#E5E0D8] shadow-2xl p-6 relative flex flex-col items-center text-center">
               
               <button 
-                onClick={() => setActiveModal(null)}
+                onClick={closeModal}
                 className="absolute top-4 right-4 p-2 text-[#A69C8E] hover:text-[#4A4036] transition-colors rounded-full hover:bg-[#F0EBE1]"
                 aria-label="Close modal"
               >
@@ -1724,37 +1954,64 @@ export default function App() {
                     <HeartIcon className="w-6 h-6 text-amber-600" />
                   </div>
                   <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Heavenly Affirmation</h3>
-                  <div className="bg-white/80 backdrop-blur-sm border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative">
-                    <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">I am guided</span>
-                    {isAffirmationLoading ? (
-                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
-                        <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Reflecting on a custom affirmation for you...</p>
-                      </div>
-                    ) : (
-                      <p className="text-[15px] italic text-[#6D6253] leading-relaxed font-serif pt-1">
-                        "{cardAffirmation}"
-                      </p>
+                  <div 
+                    className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[120px] flex items-center justify-center text-center transition-all duration-300"
+                    style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
+                  >
+                    {cardBackground && (
+                      <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
                     )}
+                    <div className="relative z-10 w-full">
+                      <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">I am guided</span>
+                      {isAffirmationLoading ? (
+                        <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                          <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                          <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Reflecting on a custom affirmation for you...</p>
+                        </div>
+                      ) : (
+                        <p className="text-[15px] italic text-[#6D6253] leading-relaxed font-serif pt-1">
+                          "{cardAffirmation}"
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
                     Let this truth sink into your spirit today.
                   </p>
-                  <div className="flex space-x-3 pt-2">
+                  <div className="flex space-x-3 pt-2 w-full">
                     <button 
-                      disabled={isAffirmationLoading}
+                      disabled={isAffirmationLoading || isImageGenerating}
                       onClick={() => {
                         navigator.clipboard.writeText(cardAffirmation || '');
                         showToast("Affirmation copied!");
-                        setActiveModal(null);
                       }}
                       className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
-                        isAffirmationLoading 
+                        (isAffirmationLoading || isImageGenerating)
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#FAF5EF] text-[#6D6253] border border-[#E5E0D8] hover:bg-[#F0EBE1]'
+                      }`}
+                    >
+                      Copy Text
+                    </button>
+                    <button 
+                      disabled={isAffirmationLoading || isImageGenerating}
+                      onClick={() => {
+                        downloadCardImage('affirmation', 'Heavenly Affirmation', cardAffirmation || '', 'I am guided');
+                      }}
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 flex items-center justify-center space-x-1.5 ${
+                        (isAffirmationLoading || isImageGenerating)
                           ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
                           : 'bg-[#8B7D6B] text-white hover:bg-[#6D6253]'
                       }`}
                     >
-                      Copy Affirmation
+                      {isImageGenerating ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Generating...</span>
+                        </>
+                      ) : (
+                        <span>Download Card</span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1766,25 +2023,57 @@ export default function App() {
                     <BookIcon className="w-6 h-6 text-blue-600" />
                   </div>
                   <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Scripture Verse</h3>
-                  <div className="bg-white/80 backdrop-blur-sm border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative">
-                    <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">{cardVerse?.reference}</span>
-                    <p className="text-[15px] text-[#6D6253] leading-relaxed font-serif pt-1">
-                      "{cardVerse?.text}"
-                    </p>
+                  <div 
+                    className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[120px] flex items-center justify-center text-center transition-all duration-300"
+                    style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
+                  >
+                    {cardBackground && (
+                      <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
+                    )}
+                    <div className="relative z-10 w-full">
+                      <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">{cardVerse?.reference}</span>
+                      <p className="text-[15px] text-[#6D6253] leading-relaxed font-serif pt-1">
+                        "{cardVerse?.text}"
+                      </p>
+                    </div>
                   </div>
                   <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
                     A lamp unto your feet and a light unto your path.
                   </p>
-                  <div className="flex space-x-3 pt-2">
+                  <div className="flex space-x-3 pt-2 w-full">
                     <button 
+                      disabled={isImageGenerating}
                       onClick={() => {
                         navigator.clipboard.writeText(`"${cardVerse?.text}" - ${cardVerse?.reference}`);
                         showToast("Verse card copied!");
-                        setActiveModal(null);
                       }}
-                      className="flex-1 py-3 bg-[#8B7D6B] hover:bg-[#6D6253] text-white text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95"
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
+                        isImageGenerating
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#FAF5EF] text-[#6D6253] border border-[#E5E0D8] hover:bg-[#F0EBE1]'
+                      }`}
                     >
-                      Copy Verse Card
+                      Copy Text
+                    </button>
+                    <button 
+                      disabled={isImageGenerating}
+                      onClick={() => {
+                        downloadCardImage('verse', 'Scripture Verse', cardVerse?.text || '', cardVerse?.reference || 'Proverbs 3:5-6');
+                      }}
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 flex items-center justify-center space-x-1.5 ${
+                        isImageGenerating
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#8B7D6B] text-white hover:bg-[#6D6253]'
+                      }`}
+                    >
+                      {isImageGenerating ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Generating...</span>
+                        </>
+                      ) : (
+                        <span>Download Card</span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1796,37 +2085,64 @@ export default function App() {
                     <SparkleIcon className="w-6 h-6 text-purple-600" />
                   </div>
                   <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Guided Prayer Prompt</h3>
-                  <div className="bg-white/80 backdrop-blur-sm border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner max-h-[180px] overflow-y-auto relative text-left">
-                    <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">Spoken Prayer</span>
-                    {isPrayerLoading ? (
-                      <div className="flex flex-col items-center justify-center py-6 space-y-3">
-                        <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Whispering a custom prayer for you...</p>
-                      </div>
-                    ) : (
-                      <p className="text-[14px] text-[#6D6253] leading-relaxed whitespace-pre-line pt-1">
-                        {cardPrayer}
-                      </p>
+                  <div 
+                    className="border border-[#F0EBE1] rounded-[24px] p-6 shadow-inner relative overflow-hidden bg-cover bg-center min-h-[140px] max-h-[180px] overflow-y-auto text-left transition-all duration-300"
+                    style={cardBackground ? { backgroundImage: `url(${cardBackground})` } : { backgroundColor: 'rgba(255, 255, 255, 0.8)' }}
+                  >
+                    {cardBackground && (
+                      <div className="absolute inset-0 bg-white/85 backdrop-blur-[1px] z-0"></div>
                     )}
+                    <div className="relative z-10 w-full">
+                      <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[#8B7D6B] text-white text-[9px] font-bold tracking-wider rounded uppercase">Spoken Prayer</span>
+                      {isPrayerLoading ? (
+                        <div className="flex flex-col items-center justify-center py-6 space-y-3">
+                          <div className="w-6 h-6 border-2 border-[#8B7D6B] border-t-transparent rounded-full animate-spin"></div>
+                          <p className="text-[12px] font-medium text-[#8B7D6B] animate-pulse">Whispering a custom prayer for you...</p>
+                        </div>
+                      ) : (
+                        <p className="text-[14px] text-[#6D6253] leading-relaxed whitespace-pre-line pt-1">
+                          {cardPrayer}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold text-center">
                     Read these words in quiet contemplation, or speak them aloud.
                   </p>
-                  <div className="flex space-x-3 pt-2">
+                  <div className="flex space-x-3 pt-2 w-full">
                     <button 
-                      disabled={isPrayerLoading}
+                      disabled={isPrayerLoading || isImageGenerating}
                       onClick={() => {
                         navigator.clipboard.writeText(cardPrayer || '');
                         showToast("Prayer copied!");
-                        setActiveModal(null);
                       }}
                       className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
-                        isPrayerLoading 
+                        (isPrayerLoading || isImageGenerating)
+                          ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                          : 'bg-[#FAF5EF] text-[#6D6253] border border-[#E5E0D8] hover:bg-[#F0EBE1]'
+                      }`}
+                    >
+                      Copy Text
+                    </button>
+                    <button 
+                      disabled={isPrayerLoading || isImageGenerating}
+                      onClick={() => {
+                        downloadCardImage('prayer', 'Guided Prayer Prompt', cardPrayer || '', 'Spoken Prayer');
+                      }}
+                      className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 flex items-center justify-center space-x-1.5 ${
+                        (isPrayerLoading || isImageGenerating)
                           ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
                           : 'bg-[#8B7D6B] text-white hover:bg-[#6D6253]'
                       }`}
                     >
-                      Copy Prayer
+                      {isImageGenerating ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Generating...</span>
+                        </>
+                      ) : (
+                        <span>Download Card</span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1849,7 +2165,7 @@ export default function App() {
                       onClick={() => {
                         navigator.clipboard.writeText(window.location.origin);
                         showToast("Invitation link copied!");
-                        setActiveModal(null);
+                        closeModal();
                       }}
                       className="flex-1 py-3 bg-[#8B7D6B] hover:bg-[#6D6253] text-white text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95"
                     >
