@@ -1723,6 +1723,19 @@ export default function App() {
                 </div>
                 <div className="flex justify-between items-end gap-3">
                   <p className="text-[12px] text-[#8B7D6B] line-clamp-2 leading-relaxed group-hover:text-[#6D6253] transition-colors">{chat.preview}</p>
+                  {chat.avatars && chat.avatars.length > 0 && (
+                    <div className="flex -space-x-1.5 flex-shrink-0 pb-0.5">
+                      {chat.avatars.map((avatar, i) => (
+                        <div key={i} className="w-[22px] h-[22px] rounded-full bg-[#E5E0D8] border-[1.5px] border-white flex items-center justify-center text-[9px] font-bold text-[#6D6253] shadow-sm relative z-10 hover:z-20 transition-all overflow-hidden">
+                          {avatar.type === 'image' && avatar.src ? (
+                            <img src={avatar.src} alt="avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            avatar.text
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </button>
             ))}
