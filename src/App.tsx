@@ -46,6 +46,16 @@ interface UserProfile {
   created_at: string;
 }
 
+interface QueuedNotification {
+  id: string;
+  chatId: string;
+  chatTitle: string;
+  senderName: string;
+  senderAvatar: string | null;
+  text: string;
+}
+
+
 // --- Custom Icons matching the sketch and theme ---
 const CrossIcon: React.FC<IconProps> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -275,6 +285,19 @@ export default function App() {
   const [lastHumanSpeaker, setLastHumanSpeaker] = useState<UserProfile | null>(null);
   const lastMessageCount = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Notification states & refs
+  const [notificationQueue, setNotificationQueue] = useState<QueuedNotification[]>([]);
+  const [activeNotification, setActiveNotification] = useState<QueuedNotification | null>(null);
+  const [isNotificationExiting, setIsNotificationExiting] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const currentChatIdRef = useRef<string | null>(currentChatId);
+
+  // Notification Drag/Swipe States
+  const [notifOffset, setNotifOffset] = useState({ x: 0, y: 0 });
+  const [isDraggingNotif, setIsDraggingNotif] = useState(false);
+  const notifDragRef = useRef({ startX: 0, startY: 0, isDragging: false });
+
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -567,56 +590,229 @@ export default function App() {
     }
   }, [user, isAuthLoading]);
 
-  // Subscribe to real-time changes for the currently active chat
+  // Subscribe to real-time changes for all chats the user is a part of
   useEffect(() => {
-    if (!currentChatId || !user || currentChatId === 'c-welcome') return;
+    if (!user) return;
 
-    console.log("[Realtime] Subscribing to chat changes for:", currentChatId);
+    console.log("[Realtime] Subscribing to all chats changes for user:", user.id);
     const channel = supabase
-      .channel(`chat_realtime:${currentChatId}`)
+      .channel('chats_realtime_all')
       .on(
         'postgres_changes',
         {
           event: 'UPDATE',
           schema: 'public',
-          table: 'chats',
-          filter: `id=eq.${currentChatId}`
+          table: 'chats'
         },
         (payload: any) => {
-          console.log("[Realtime] Received update for active chat:", payload);
+          console.log("[Realtime] Received update for a chat:", payload);
           const updatedChat = payload.new;
-          if (updatedChat) {
-            // Update the chats list in state
-            setChats(prev => prev.map(c => c.id === updatedChat.id ? {
-              ...c,
+          if (!updatedChat) return;
+
+          setChats(prev => {
+            const exists = prev.some(c => c.id === updatedChat.id);
+            
+            // Check if there are new messages in this chat
+            const oldChat = prev.find(c => c.id === updatedChat.id);
+            const oldMsgCount = oldChat ? (oldChat.messages?.length || 0) : 0;
+            const newMsgCount = updatedChat.messages ? updatedChat.messages.length : 0;
+
+            if (newMsgCount > oldMsgCount) {
+              const lastMsg = updatedChat.messages[newMsgCount - 1];
+              // Ensure we are a participant/creator, not currently in this chat, and the sender is not us
+              const isParticipant = updatedChat.participants?.some((p: any) => p.id === user.id) || updatedChat.user_id === user.id;
+              const isGroup = updatedChat.participants && updatedChat.participants.length > 0;
+              const isNotCurrent = currentChatIdRef.current !== updatedChat.id;
+              const isNotSender = lastMsg && lastMsg.senderId !== user.id;
+
+              if (isParticipant && isGroup && isNotCurrent && isNotSender) {
+                console.log("[Realtime Notify] New message in group chat not currently active:", updatedChat.id);
+                
+                // Add to notification queue
+                const firstLine = lastMsg.text ? lastMsg.text.split('\n')[0] : '';
+                const newNotification: QueuedNotification = {
+                  id: `${updatedChat.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                  chatId: updatedChat.id,
+                  chatTitle: updatedChat.title || 'Shared Sanctuary',
+                  senderName: lastMsg.senderName || 'Someone',
+                  senderAvatar: updatedChat.participants?.find((p: any) => p.id === lastMsg.senderId)?.avatar_url || null,
+                  text: firstLine
+                };
+                
+                // Append notification to queue
+                setNotificationQueue(q => [...q, newNotification]);
+
+                // Increment unread count
+                setUnreadCounts(u => ({
+                  ...u,
+                  [updatedChat.id]: (u[updatedChat.id] || 0) + 1
+                }));
+              }
+            }
+
+            const updatedPastChat: PastChat = {
+              id: updatedChat.id,
               title: updatedChat.title,
               preview: updatedChat.preview,
               messages: updatedChat.messages || [],
+              date: formatChatDate(updatedChat.updated_at || updatedChat.created_at),
+              created_at: updatedChat.created_at,
               participants: updatedChat.participants || [],
               avatars: updatedChat.participants?.map((p: any) => ({
                 type: p.avatar_url ? 'image' : 'text',
                 src: p.avatar_url,
                 text: p.username ? p.username[0].toUpperCase() : '?'
               })) || []
-            } : c));
-          }
+            };
+
+            if (exists) {
+              return prev.map(c => c.id === updatedChat.id ? updatedPastChat : c);
+            } else {
+              // If it's a chat the user is part of, prepend it
+              const isPart = updatedChat.participants?.some((p: any) => p.id === user.id) || updatedChat.user_id === user.id;
+              if (isPart) {
+                return [updatedPastChat, ...prev];
+              }
+              return prev;
+            }
+          });
         }
       )
       .subscribe((status) => {
-        console.log(`[Realtime] Subscription status for chat:${currentChatId} is ${status}`);
+        console.log(`[Realtime] Subscription status for all chats is ${status}`);
       });
 
     return () => {
-      console.log("[Realtime] Cleaning up subscription for:", currentChatId);
+      console.log("[Realtime] Cleaning up all-chats subscription");
       supabase.removeChannel(channel);
     };
-  }, [currentChatId, user]);
+  }, [user]);
 
-  // Reset reply-to and quote state when active chat changes
+  // Reset reply-to, quote state, sync currentChatIdRef, and clear unread counts when active chat changes
   useEffect(() => {
     setReplyToUser(null);
     setQuotedMessage(null);
+    currentChatIdRef.current = currentChatId;
+    if (currentChatId) {
+      setUnreadCounts(prev => {
+        if (!prev[currentChatId]) return prev;
+        const next = { ...prev };
+        delete next[currentChatId];
+        return next;
+      });
+    }
   }, [currentChatId]);
+
+  // Helper to trigger active notification exit and transition to next
+  const dismissActiveNotification = () => {
+    setIsNotificationExiting(true);
+    setTimeout(() => {
+      setActiveNotification(null);
+      setIsNotificationExiting(false);
+    }, 300); // 300ms matches exit transition duration
+  };
+
+  const handleNotificationClick = (chatId: string) => {
+    // Clear unread count for this chat
+    setUnreadCounts(prev => {
+      if (!prev[chatId]) return prev;
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
+    // Set active chat
+    setCurrentChatId(chatId);
+    // Close sidebar/menus
+    setIsSidebarOpen(false);
+    setIsMenuOpen(false);
+    // Dismiss
+    dismissActiveNotification();
+  };
+
+  // Manage notification queue
+  useEffect(() => {
+    if (!activeNotification && notificationQueue.length > 0) {
+      const nextNotif = notificationQueue[0];
+      setNotificationQueue(prev => prev.slice(1));
+      setActiveNotification(nextNotif);
+    }
+  }, [activeNotification, notificationQueue]);
+
+  // Handle 7-second auto-dismiss timeout
+  useEffect(() => {
+    if (!activeNotification) return;
+
+    const timer = setTimeout(() => {
+      dismissActiveNotification();
+    }, 7000);
+
+    return () => clearTimeout(timer);
+  }, [activeNotification]);
+
+  // Drag and Swipe to Dismiss Gesture Handlers
+  const handleDragStart = (clientX: number, clientY: number) => {
+    notifDragRef.current = {
+      startX: clientX,
+      startY: clientY,
+      isDragging: true
+    };
+    setIsDraggingNotif(true);
+  };
+
+  const handleDragMove = (clientX: number, clientY: number) => {
+    if (!notifDragRef.current.isDragging) return;
+    const diffX = clientX - notifDragRef.current.startX;
+    const diffY = clientY - notifDragRef.current.startY;
+    
+    // Allow horizontal drag, and restrict vertical drag to up-only (or resist downward)
+    const dragX = diffX;
+    const dragY = diffY < 0 ? diffY : diffY * 0.2;
+    setNotifOffset({ x: dragX, y: dragY });
+  };
+
+  const handleDragEnd = () => {
+    if (!notifDragRef.current.isDragging) return;
+    notifDragRef.current.isDragging = false;
+    setIsDraggingNotif(false);
+
+    const threshold = 80; // pixels to trigger dismiss
+    if (Math.abs(notifOffset.x) > threshold || notifOffset.y < -threshold) {
+      // Dismiss
+      dismissActiveNotification();
+    }
+    setNotifOffset({ x: 0, y: 0 });
+  };
+
+  const handleNotifTouchStart = (e: React.TouchEvent) => {
+    handleDragStart(e.touches[0].clientX, e.touches[0].clientY);
+  };
+
+  const handleNotifTouchMove = (e: React.TouchEvent) => {
+    handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
+  };
+
+  const handleNotifTouchEnd = () => {
+    handleDragEnd();
+  };
+
+  const handleNotifMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    handleDragStart(e.clientX, e.clientY);
+  };
+
+  const handleNotifMouseMove = (e: React.MouseEvent) => {
+    handleDragMove(e.clientX, e.clientY);
+  };
+
+  const handleNotifMouseUp = () => {
+    handleDragEnd();
+  };
+
+  const handleNotifMouseLeave = () => {
+    if (isDraggingNotif) {
+      handleDragEnd();
+    }
+  };
 
   // Determine the last human speaker and revert input modes in group chats
   useEffect(() => {
@@ -1748,6 +1944,73 @@ export default function App() {
       {/* Mobile App Frame constraint */}
       <div className="flex flex-col w-full h-full max-w-md bg-[#FAF8F5] sm:h-[800px] sm:max-h-[90dvh] sm:rounded-[40px] shadow-2xl overflow-hidden relative border border-[#E5E0D8]" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         
+        {/* In-app Group Chat Notification Pill */}
+        {activeNotification && (
+          <div 
+            onTouchStart={handleNotifTouchStart}
+            onTouchMove={handleNotifTouchMove}
+            onTouchEnd={handleNotifTouchEnd}
+            onMouseDown={handleNotifMouseDown}
+            onMouseMove={handleNotifMouseMove}
+            onMouseUp={handleNotifMouseUp}
+            onMouseLeave={handleNotifMouseLeave}
+            onClick={() => {
+              const wasDragged = Math.abs(notifOffset.x) > 5 || Math.abs(notifOffset.y) > 5;
+              if (!wasDragged) {
+                handleNotificationClick(activeNotification.chatId);
+              }
+            }}
+            style={{ 
+              transform: `translate(${notifOffset.x}px, ${notifOffset.y}px)`, 
+              transition: isDraggingNotif ? 'none' : 'transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease' 
+            }}
+            className={`
+              absolute top-4 left-4 right-4 z-[50] 
+              bg-white/95 backdrop-blur-md border border-[#E5E0D8] 
+              p-3 rounded-[20px] shadow-[0_10px_25px_-5px_rgba(74,64,54,0.1),0_8px_10px_-6px_rgba(74,64,54,0.05)]
+              cursor-pointer flex items-center space-x-3 
+              active:scale-98 transition-all duration-300 select-none
+              ${isNotificationExiting ? 'animate-notification-exit' : 'animate-notification-enter'}
+            `}
+          >
+            {/* Avatar or Icon */}
+            <div className="w-8 h-8 rounded-full bg-[#E5E0D8] border border-white flex items-center justify-center text-[11px] font-bold text-[#6D6253] shadow-sm overflow-hidden flex-shrink-0">
+              {activeNotification.senderAvatar ? (
+                <img src={activeNotification.senderAvatar} alt="sender avatar" className="w-full h-full object-cover" />
+              ) : (
+                activeNotification.senderName[0].toUpperCase()
+              )}
+            </div>
+
+            {/* Notification Text */}
+            <div className="flex-1 min-w-0">
+              <div className="flex justify-between items-baseline">
+                <span className="text-[10px] font-bold text-[#8B7D6B] uppercase tracking-wider truncate">
+                  {activeNotification.chatTitle}
+                </span>
+                <span className="text-[9px] text-[#A69C8E] font-medium ml-2 flex-shrink-0">Just now</span>
+              </div>
+              <p className="text-[13px] text-[#4A4036] font-semibold truncate mt-0.5">
+                <span className="text-[#8B7D6B] font-normal">@{activeNotification.senderName}: </span>
+                {activeNotification.text}
+              </p>
+            </div>
+
+            {/* Close Button */}
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                dismissActiveNotification();
+              }}
+              className="p-1 rounded-full text-[#A69C8E] hover:text-[#4A4036] hover:bg-[#F0EBE1] transition-colors flex-shrink-0"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* Global Overlay to close menu when clicking outside */}
         <div 
           className={`absolute inset-0 z-20 bg-[#4A4036]/5 backdrop-blur-[2px] transition-all duration-500 ${(isMenuOpen || isSidebarOpen) ? 'opacity-100 visible' : 'opacity-0 invisible'}`}
@@ -1783,12 +2046,18 @@ export default function App() {
                   setCurrentChatId(chat.id);
                   setIsSidebarOpen(false);
                 }}
-                className={`w-full text-left p-4 rounded-[24px] rounded-bl-[8px] border transition-all duration-300 group ${
+                className={`w-full text-left p-4 rounded-[24px] rounded-bl-[8px] border transition-all duration-300 group relative ${
                   chat.id === activeChat.id
                     ? 'bg-[#EFECE6]/60 border-[#DED7CD] shadow-sm font-medium'
                     : 'bg-white border-transparent hover:border-[#E5E0D8] shadow-[0_2px_10px_-4px_rgba(0,0,0,0.02)] hover:shadow-sm'
                 }`}
               >
+                {/* Unread Message Count Badge */}
+                {unreadCounts[chat.id] > 0 && (
+                  <div className="absolute -top-1 -right-1 bg-[#D9534F] text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm flex items-center justify-center z-20 min-w-[16px] h-4 leading-none animate-pulse">
+                    {unreadCounts[chat.id]}
+                  </div>
+                )}
                 <div className="flex justify-between items-baseline mb-1.5">
                   <h3 className="font-semibold text-[#4A4036] text-[13.5px] truncate pr-3">{chat.title}</h3>
                   <span className="text-[10px] text-[#A69C8E] flex-shrink-0 font-medium tracking-wide">{chat.date}</span>
