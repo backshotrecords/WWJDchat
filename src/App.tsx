@@ -271,6 +271,9 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [replyToUser, setReplyToUser] = useState<UserProfile | null>(null);
   const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
+  const [activeInputMode, setActiveInputMode] = useState<'human' | 'llm'>('llm');
+  const [lastHumanSpeaker, setLastHumanSpeaker] = useState<UserProfile | null>(null);
+  const lastMessageCount = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -614,6 +617,52 @@ export default function App() {
     setReplyToUser(null);
     setQuotedMessage(null);
   }, [currentChatId]);
+
+  // Determine the last human speaker and revert input modes in group chats
+  useEffect(() => {
+    const isGroup = activeChat.participants && activeChat.participants.length > 0;
+    if (!isGroup || !user) {
+      setLastHumanSpeaker(null);
+      setActiveInputMode('llm');
+      return;
+    }
+
+    // Default input mode to human in a group chat
+    const otherHumanMessages = messages.filter(
+      m => m.sender === 'user' && m.senderId && m.senderId !== user.id
+    );
+
+    if (otherHumanMessages.length > 0) {
+      const lastMsg = otherHumanMessages[otherHumanMessages.length - 1];
+      const speakerProfile = activeChat.participants?.find(p => p.id === lastMsg.senderId);
+      
+      setLastHumanSpeaker(speakerProfile || {
+        id: lastMsg.senderId || '',
+        username: lastMsg.senderName || 'Friend',
+        email: '',
+        avatar_url: null,
+        created_at: new Date().toISOString()
+      });
+    } else {
+      // If no messages sent yet, default to the first other participant
+      const firstOther = activeChat.participants?.find(p => p.id !== user.id);
+      if (firstOther) {
+        setLastHumanSpeaker(firstOther);
+      } else {
+        setLastHumanSpeaker(null);
+      }
+    }
+  }, [messages, currentChatId, user, activeChat.participants]);
+
+  // Revert activeInputMode to 'human' automatically on any new message in group chats
+  useEffect(() => {
+    const isGroup = activeChat.participants && activeChat.participants.length > 0;
+    if (isGroup && messages.length > lastMessageCount.current) {
+      console.log("[Mode Revert] New message detected. Reverting input mode to 'human'.");
+      setActiveInputMode('human');
+    }
+    lastMessageCount.current = messages.length;
+  }, [messages, activeChat.participants]);
 
   // Update specific chat content locally or in the DB
   const updateChatContent = async (chatId: string, updatedMessages: Message[]) => {
@@ -1474,20 +1523,29 @@ export default function App() {
     console.log("[Chat Debug] Tapped message to quote:", msg.text);
     setQuotedMessage(msg);
     
-    // If it's a user message from another participant, also suggest replying directly to them
-    if (msg.sender === 'user' && msg.senderId && msg.senderId !== user?.id) {
-      const activeChatObj = chats.find(c => c.id === currentChatId);
-      const senderProfile = activeChatObj?.participants?.find(p => p.id === msg.senderId);
-      if (senderProfile) {
-        setReplyToUser(senderProfile);
-      } else {
-        setReplyToUser({
-          id: msg.senderId,
-          username: msg.senderName || 'Friend',
-          email: '',
-          avatar_url: null,
-          created_at: new Date().toISOString()
-        });
+    const isGroup = activeChat.participants && activeChat.participants.length > 0;
+    
+    if (isGroup) {
+      if (msg.sender === 'ai') {
+        // Tapping guidance message switches to LLM mode
+        setActiveInputMode('llm');
+        setReplyToUser(null);
+      } else if (msg.sender === 'user' && msg.senderId && msg.senderId !== user?.id) {
+        // Tapping user message switches to Human mode and targets the user
+        setActiveInputMode('human');
+        const activeChatObj = chats.find(c => c.id === currentChatId);
+        const senderProfile = activeChatObj?.participants?.find(p => p.id === msg.senderId);
+        if (senderProfile) {
+          setReplyToUser(senderProfile);
+        } else {
+          setReplyToUser({
+            id: msg.senderId,
+            username: msg.senderName || 'Friend',
+            email: '',
+            avatar_url: null,
+            created_at: new Date().toISOString()
+          });
+        }
       }
     }
   };
@@ -1507,7 +1565,8 @@ export default function App() {
     } : undefined;
     setQuotedMessage(null);
 
-    const isDirectReply = !!replyToUser;
+    const isGroup = currentChat.participants && currentChat.participants.length > 0;
+    const isDirectReply = isGroup ? (activeInputMode === 'human') : false;
     setReplyToUser(null);
 
     const newUserMessage: Message = {
@@ -1564,6 +1623,11 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         await updateChatContent(currentChat.id, [...updatedMessages, newAiMessage]);
+        
+        // Revert to human mode in group chats after LLM replies
+        if (isGroup) {
+          setActiveInputMode('human');
+        }
       } else {
         throw new Error('Missing text in API response');
       }
@@ -1578,6 +1642,11 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         await updateChatContent(currentChat.id, [...updatedMessages, newAiMessage]);
+        
+        // Revert to human mode in group chats after LLM replies
+        if (isGroup) {
+          setActiveInputMode('human');
+        }
         setIsTyping(false);
       }, 1200 + Math.random() * 1000);
       return;
@@ -1662,6 +1731,9 @@ export default function App() {
       </div>
     );
   }
+
+  const isGroupChat = !!(activeChat.participants && activeChat.participants.length > 0);
+  const currentRecipient = replyToUser || lastHumanSpeaker;
 
   return (
     <div className="flex justify-center items-center w-full h-[100dvh] bg-[#EFECE6] font-sans text-[#4A4036] p-0 sm:p-4 md:p-8 overflow-hidden">
@@ -1956,46 +2028,97 @@ export default function App() {
         {/* Input Area - Pill shaped, soft edges, matching the sketch's bottom section */}
         <div className="p-4 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5] to-transparent pt-6">
           
-          {/* Active Context Pills */}
-          {(replyToUser || quotedMessage) && (
-            <div className="flex flex-col space-y-1.5 mb-3 px-2">
-              {quotedMessage && (
-                <div className="flex items-center justify-between bg-white border border-[#E5E0D8] rounded-[16px] px-3.5 py-2 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-                  <div className="flex items-center space-x-2 text-[12px] truncate">
-                    <span className="text-[#8B7D6B] font-bold flex-shrink-0">Quoting {quotedMessage.sender === 'ai' ? 'Guidance' : `@${quotedMessage.senderName || 'user'}`}:</span>
-                    <span className="text-[#6D6253] italic truncate">"{quotedMessage.text}"</span>
-                  </div>
-                  <button 
-                    type="button"
-                    onClick={() => setQuotedMessage(null)}
-                    className="p-1 text-[#A69C8E] hover:text-red-500 hover:bg-[#F0EBE1] rounded-full transition-colors ml-2 flex-shrink-0"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
+          {/* Active Quote Pill */}
+          {quotedMessage && (
+            <div className="flex flex-col space-y-1 mb-2 px-2">
+              <div className="flex items-center justify-between bg-white border border-[#E5E0D8] rounded-[16px] px-3.5 py-1.5 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+                <div className="flex items-center space-x-2 text-[12px] truncate">
+                  <span className="text-[#8B7D6B] font-bold flex-shrink-0">Quoting {quotedMessage.sender === 'ai' ? 'Guidance' : `@${quotedMessage.senderName || 'user'}`}:</span>
+                  <span className="text-[#6D6253] italic truncate">"{quotedMessage.text}"</span>
                 </div>
-              )}
-              {replyToUser && (
-                <div className="flex items-center justify-between bg-[#EFECE6] border border-[#DED7CD] rounded-[16px] px-3.5 py-2 shadow-sm">
-                  <div className="flex items-center space-x-2 text-[12px] truncate">
-                    <span className="w-1.5 h-1.5 bg-[#8B7D6B] rounded-full flex-shrink-0 animate-pulse"></span>
-                    <span className="text-[#4A4036] font-bold">Replying directly to @{replyToUser.username}</span>
-                    <span className="text-[#8B7D6B] text-[10px] font-semibold uppercase tracking-wider">(LLM Paused)</span>
+                <button 
+                  type="button"
+                  onClick={() => setQuotedMessage(null)}
+                  className="p-1 text-[#A69C8E] hover:text-red-500 hover:bg-[#F0EBE1] rounded-full transition-colors ml-2 flex-shrink-0"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Group Chat Status Bar & Toggle Cross */}
+          {isGroupChat && (
+            <div className="flex justify-between items-center mb-3 px-2">
+              <div className="flex-1 min-w-0 pr-3">
+                {activeInputMode === 'llm' ? (
+                  <div className="inline-flex items-center space-x-1.5 bg-[#FAF5EF] border border-[#E5DCD0] rounded-full px-3 py-1 shadow-sm animate-heavenly-burst">
+                    <span className="w-1.5 h-1.5 bg-[#8B7D6B] rounded-full animate-pulse"></span>
+                    <span className="text-[#8B7D6B] text-[10.5px] font-bold uppercase tracking-wider">WWJD Guidance Mode</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveInputMode('human');
+                        showToast("AI paused. Talking to group.");
+                      }}
+                      className="p-0.5 text-[#A69C8E] hover:text-red-500 rounded-full transition-colors"
+                      title="Switch to human chat"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
                   </div>
-                  <button 
-                    type="button"
-                    onClick={() => setReplyToUser(null)}
-                    className="p-1 text-[#8B7D6B] hover:text-red-600 hover:bg-[#DED7CD] rounded-full transition-colors ml-2 flex-shrink-0"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
-                </div>
-              )}
+                ) : replyToUser ? (
+                  <div className="inline-flex items-center space-x-1.5 bg-[#EFECE6] border border-[#DED7CD] rounded-full px-3 py-1 shadow-sm">
+                    <span className="w-1.5 h-1.5 bg-[#8B7D6B] rounded-full"></span>
+                    <span className="text-[#4A4036] text-[10.5px] font-bold uppercase tracking-wider">Replying to @{replyToUser.username}</span>
+                    <button
+                      type="button"
+                      onClick={() => setReplyToUser(null)}
+                      className="p-0.5 text-[#8B7D6B] hover:text-red-600 rounded-full transition-colors"
+                      title="Clear reply target"
+                    >
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-[#A69C8E] font-semibold tracking-wide flex items-center space-x-1.5 select-none">
+                    <span className="w-1.5 h-1.5 bg-[#A69C8E] rounded-full"></span>
+                    <span>Default: Replying to @{lastHumanSpeaker?.username || 'Friend'}</span>
+                    <span className="text-[9px] text-[#C2B8AA] font-normal uppercase tracking-wider">(AI Paused)</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Floating Cross Button to engage LLM */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeInputMode === 'human') {
+                    setActiveInputMode('llm');
+                    showToast("Seeking What Would Jesus Do...");
+                  } else {
+                    setActiveInputMode('human');
+                    showToast("AI paused. Talking to group.");
+                  }
+                }}
+                className={`w-8 h-8 rounded-full border shadow-sm transition-all duration-300 transform active:scale-95 flex items-center justify-center flex-shrink-0 ${
+                  activeInputMode === 'llm'
+                    ? 'bg-[#8B7D6B] text-white border-transparent scale-105 shadow-md rotate-[135deg]'
+                    : 'bg-white hover:bg-[#FAF8F5] text-[#8B7D6B] border-[#E5E0D8]'
+                }`}
+                title={activeInputMode === 'llm' ? "AI Active. Tap to switch to Human Chat" : "Tap to ask What Would Jesus Do"}
+              >
+                <CrossIcon className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -2052,7 +2175,13 @@ export default function App() {
                     handleSend(e);
                   }
                 }}
-                placeholder={replyToUser ? `Whisper directly to @${replyToUser.username}...` : "Share your situation..."}
+                placeholder={
+                  isGroupChat
+                    ? activeInputMode === 'llm'
+                      ? "Ask What Would Jesus Do?..."
+                      : `Whisper directly to @${currentRecipient?.username || 'Friend'}...`
+                    : "Share your situation..."
+                }
                 className="flex-1 max-h-[192px] min-h-[44px] bg-transparent resize-none outline-none py-3 px-4 text-[#4A4036] placeholder-[#A69C8E]"
                 rows={1}
                 style={{ height: 'auto' }}
@@ -2075,8 +2204,12 @@ export default function App() {
           </form>
           
           <div className="text-center mt-3 mb-1">
-            <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
-              {replyToUser ? `Whispering directly to @${replyToUser.username} (AI paused)` : "Take a moment to whisper a quick prayer before you send."}
+            <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-bold select-none">
+              {isGroupChat
+                ? activeInputMode === 'llm'
+                  ? "✨ Asking What Would Jesus Do? (Guidance Active)"
+                  : `Whispering directly to @${currentRecipient?.username || 'Friend'} (AI paused)`
+                : "Take a moment to whisper a quick prayer before you send."}
             </p>
           </div>
         </div>
