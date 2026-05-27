@@ -27,10 +27,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Format our messages array into the format OpenAI expects: { role, content }
-    const formattedMessages = messages.map((m: any) => ({
-      role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-      content: m.text,
-    }));
+    const formattedMessages = messages.map((m: any) => {
+      let content = m.text;
+      
+      // If there is a quote context, prepend it to the text
+      if (m.quote) {
+        content = `(Replying to ${m.quote.senderName}'s message: "${m.quote.text}")\n${content}`;
+      }
+
+      // Add sender names to help the AI distinguish between participants in group chats
+      if (m.sender === 'user') {
+        content = `[@${m.senderName || 'user'}]: ${content}`;
+      } else {
+        content = `[WWJD Guidance]: ${content}`;
+      }
+
+      return {
+        role: (m.sender === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: content,
+      };
+    });
 
     // Inject system persona prompt
     const systemPrompt = {

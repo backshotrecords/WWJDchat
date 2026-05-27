@@ -11,8 +11,14 @@ interface IconProps {
 interface Message {
   id: number;
   sender: 'user' | 'ai';
+  senderId?: string;
+  senderName?: string;
   text: string;
   timestamp: string;
+  quote?: {
+    text: string;
+    senderName: string;
+  };
 }
 
 interface AvatarItem {
@@ -29,6 +35,7 @@ interface PastChat {
   messages: Message[];
   avatars?: AvatarItem[];
   created_at?: string;
+  participants?: UserProfile[];
 }
 
 interface UserProfile {
@@ -262,6 +269,8 @@ export default function App() {
   // Chat input and audio states
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [replyToUser, setReplyToUser] = useState<UserProfile | null>(null);
+  const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -401,7 +410,7 @@ export default function App() {
         const { data, error } = await supabase
           .from('chats')
           .select('*')
-          .eq('user_id', currUser.id)
+          .or(`user_id.eq.${currUser.id},participants.cs.[{"id":"${currUser.id}"}]`)
           .order('updated_at', { ascending: false });
 
         if (error) {
@@ -416,7 +425,13 @@ export default function App() {
             preview: item.preview,
             messages: item.messages,
             date: formatChatDate(item.updated_at || item.created_at),
-            created_at: item.created_at
+            created_at: item.created_at,
+            participants: item.participants || [],
+            avatars: item.participants?.map((p: any) => ({
+              type: p.avatar_url ? 'image' : 'text',
+              src: p.avatar_url,
+              text: p.username ? p.username[0].toUpperCase() : '?'
+            })) || []
           }));
           setChats(dbChatsList);
           // Set active chat to the most recent one
@@ -529,6 +544,76 @@ export default function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Check for invite parameter in URL and join chat if user is logged in
+  useEffect(() => {
+    if (isAuthLoading) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const inviteId = params.get('invite');
+    if (!inviteId) return;
+
+    if (!user) {
+      console.log("[Invite Flow] Guest clicked invite link. Displaying auth screen.");
+      setPendingAction(`invite:${inviteId}`);
+      setAuthMode('signin');
+      setAuthError(null);
+      setShowAuthOverlay(true);
+    } else {
+      joinChatViaInvite(inviteId, user);
+    }
+  }, [user, isAuthLoading]);
+
+  // Subscribe to real-time changes for the currently active chat
+  useEffect(() => {
+    if (!currentChatId || !user || currentChatId === 'c-welcome') return;
+
+    console.log("[Realtime] Subscribing to chat changes for:", currentChatId);
+    const channel = supabase
+      .channel(`chat_realtime:${currentChatId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chats',
+          filter: `id=eq.${currentChatId}`
+        },
+        (payload: any) => {
+          console.log("[Realtime] Received update for active chat:", payload);
+          const updatedChat = payload.new;
+          if (updatedChat) {
+            // Update the chats list in state
+            setChats(prev => prev.map(c => c.id === updatedChat.id ? {
+              ...c,
+              title: updatedChat.title,
+              preview: updatedChat.preview,
+              messages: updatedChat.messages || [],
+              participants: updatedChat.participants || [],
+              avatars: updatedChat.participants?.map((p: any) => ({
+                type: p.avatar_url ? 'image' : 'text',
+                src: p.avatar_url,
+                text: p.username ? p.username[0].toUpperCase() : '?'
+              })) || []
+            } : c));
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log(`[Realtime] Subscription status for chat:${currentChatId} is ${status}`);
+      });
+
+    return () => {
+      console.log("[Realtime] Cleaning up subscription for:", currentChatId);
+      supabase.removeChannel(channel);
+    };
+  }, [currentChatId, user]);
+
+  // Reset reply-to and quote state when active chat changes
+  useEffect(() => {
+    setReplyToUser(null);
+    setQuotedMessage(null);
+  }, [currentChatId]);
 
   // Update specific chat content locally or in the DB
   const updateChatContent = async (chatId: string, updatedMessages: Message[]) => {
@@ -1025,6 +1110,110 @@ export default function App() {
     }
   };
 
+  // Join chat via invitation link
+  const joinChatViaInvite = async (inviteId: string, currentUser: User) => {
+    try {
+      console.log("[Invite Flow] Attempting to join chat:", inviteId);
+      const { data: chatData, error: fetchError } = await supabase
+        .from('chats')
+        .select('*')
+        .eq('id', inviteId)
+        .single();
+
+      if (fetchError || !chatData) {
+        console.error("[Invite Flow] Error fetching chat details:", fetchError?.message);
+        showToast("Could not find the invited conversation.");
+        return;
+      }
+
+      let updatedParticipants = chatData.participants || [];
+      let needsUpdate = false;
+      let activeMessages = chatData.messages || [];
+
+      // 1. If it's a new group chat and creator is not in participants, add the creator first
+      const isCreatorInList = updatedParticipants.some((p: any) => p.id === chatData.user_id);
+      if (!isCreatorInList) {
+        const { data: creatorProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', chatData.user_id)
+          .single();
+
+        if (creatorProfile) {
+          updatedParticipants.push({
+            id: creatorProfile.id,
+            username: creatorProfile.username || 'Creator',
+            email: creatorProfile.email || '',
+            avatar_url: creatorProfile.avatar_url || null
+          });
+          needsUpdate = true;
+        }
+      }
+
+      // 2. Add current joining user if they aren't already in there
+      const isJoined = updatedParticipants.some((p: any) => p.id === currentUser.id);
+      if (!isJoined && currentUser.id !== chatData.user_id) {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', currentUser.id)
+          .single();
+
+        const newParticipant = {
+          id: currentUser.id,
+          username: profileData?.username || currentUser.email?.split('@')[0] || 'Friend',
+          email: currentUser.email || '',
+          avatar_url: profileData?.avatar_url || null
+        };
+
+        updatedParticipants.push(newParticipant);
+        needsUpdate = true;
+
+        // Add a system join message into the thread
+        const joinMsg: Message = {
+          id: Date.now(),
+          sender: 'ai',
+          text: `✨ **@${newParticipant.username}** joined the sanctuary.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        activeMessages = [...activeMessages, joinMsg];
+      }
+
+      if (needsUpdate) {
+        console.log("[Invite Flow] Updating chat participants...");
+        const { error: updateError } = await supabase
+          .from('chats')
+          .update({
+            participants: updatedParticipants,
+            messages: activeMessages,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', inviteId);
+
+        if (updateError) {
+          console.error("[Invite Flow] Failed to update chat participants:", updateError.message);
+          showToast("Failed to join the shared conversation.");
+          return;
+        }
+
+        if (!isJoined && currentUser.id !== chatData.user_id) {
+          showToast(`Joined the shared reflection sanctuary!`);
+        }
+      }
+
+      // Remove invite parameter from URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      window.history.replaceState({}, document.title, url.pathname + url.search);
+
+      // Refresh chats list and focus the joined chat
+      await loadChats(currentUser);
+      setCurrentChatId(inviteId);
+    } catch (e) {
+      console.error("[Invite Flow] Exception during join:", e);
+    }
+  };
+
   // Triggered after a user successfully logs in to run any actions they clicked on as a guest
   const runPendingAction = (_userId: string, targetChats: PastChat[], chatId: string | null) => {
     if (!pendingAction) return;
@@ -1043,6 +1232,18 @@ export default function App() {
       triggerPrayerPrompt(currentMessages);
     } else if (pendingAction === "Invite Someone") {
       setActiveModal('invite');
+    } else if (pendingAction.startsWith("invite:")) {
+      const inviteId = pendingAction.split(":")[1];
+      if (inviteId) {
+        // Find user from supabase auth or active user state
+        supabase.auth.getUser().then(({ data: { user: authUser } }) => {
+          if (authUser) {
+            joinChatViaInvite(inviteId, authUser);
+          } else if (user) {
+            joinChatViaInvite(inviteId, user);
+          }
+        });
+      }
     }
 
     setPendingAction(null);
@@ -1094,13 +1295,24 @@ export default function App() {
           await syncLocalChatsToDb(data.user.id);
           
           // Read updated chats from DB to locate the active one
-          const { data: updatedChats } = await supabase.from('chats').select('*').eq('user_id', data.user.id).order('updated_at', { ascending: false });
+          const { data: updatedChats } = await supabase
+            .from('chats')
+            .select('*')
+            .or(`user_id.eq.${data.user.id},participants.cs.[{"id":"${data.user.id}"}]`)
+            .order('updated_at', { ascending: false });
           const mapped: PastChat[] = (updatedChats || []).map(item => ({
             id: item.id,
             title: item.title,
             preview: item.preview,
             messages: item.messages,
-            date: formatChatDate(item.updated_at || item.created_at)
+            date: formatChatDate(item.updated_at || item.created_at),
+            created_at: item.created_at,
+            participants: item.participants || [],
+            avatars: item.participants?.map((p: any) => ({
+              type: p.avatar_url ? 'image' : 'text',
+              src: p.avatar_url,
+              text: p.username ? p.username[0].toUpperCase() : '?'
+            })) || []
           }));
           setChats(mapped);
           
@@ -1144,13 +1356,24 @@ export default function App() {
           await syncLocalChatsToDb(data.user.id);
 
           // Get latest synced database chats
-          const { data: updatedChats } = await supabase.from('chats').select('*').eq('user_id', data.user.id).order('updated_at', { ascending: false });
+          const { data: updatedChats } = await supabase
+            .from('chats')
+            .select('*')
+            .or(`user_id.eq.${data.user.id},participants.cs.[{"id":"${data.user.id}"}]`)
+            .order('updated_at', { ascending: false });
           const mapped: PastChat[] = (updatedChats || []).map(item => ({
             id: item.id,
             title: item.title,
             preview: item.preview,
             messages: item.messages,
-            date: formatChatDate(item.updated_at || item.created_at)
+            date: formatChatDate(item.updated_at || item.created_at),
+            created_at: item.created_at,
+            participants: item.participants || [],
+            avatars: item.participants?.map((p: any) => ({
+              type: p.avatar_url ? 'image' : 'text',
+              src: p.avatar_url,
+              text: p.username ? p.username[0].toUpperCase() : '?'
+            })) || []
           }));
           setChats(mapped);
           
@@ -1296,6 +1519,29 @@ export default function App() {
     scrollToBottom();
   }, [messages, isTyping]);
 
+  // Handle tapping a message bubble to quote it or reply directly
+  const handleMessageTap = (msg: Message) => {
+    console.log("[Chat Debug] Tapped message to quote:", msg.text);
+    setQuotedMessage(msg);
+    
+    // If it's a user message from another participant, also suggest replying directly to them
+    if (msg.sender === 'user' && msg.senderId && msg.senderId !== user?.id) {
+      const activeChatObj = chats.find(c => c.id === currentChatId);
+      const senderProfile = activeChatObj?.participants?.find(p => p.id === msg.senderId);
+      if (senderProfile) {
+        setReplyToUser(senderProfile);
+      } else {
+        setReplyToUser({
+          id: msg.senderId,
+          username: msg.senderName || 'Friend',
+          email: '',
+          avatar_url: null,
+          created_at: new Date().toISOString()
+        });
+      }
+    }
+  };
+
   // Handle Send action
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1304,18 +1550,38 @@ export default function App() {
     const currentChat = activeChat;
     const userMessageText = inputText.trim();
 
+    // Capture active states and clear them
+    const activeQuote = quotedMessage ? {
+      text: quotedMessage.text,
+      senderName: quotedMessage.sender === 'ai' ? 'WWJD Guidance' : (quotedMessage.senderName || 'Friend')
+    } : undefined;
+    setQuotedMessage(null);
+
+    const isDirectReply = !!replyToUser;
+    setReplyToUser(null);
+
     const newUserMessage: Message = {
       id: Date.now(),
       sender: 'user',
+      senderId: user?.id,
+      senderName: profile?.username || user?.email?.split('@')[0] || 'Friend',
       text: userMessageText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      quote: activeQuote
     };
 
     const updatedMessages = [...currentChat.messages, newUserMessage];
     setInputText("");
-    setIsTyping(true);
 
-    // Update in memory & DB / local storage
+    if (isDirectReply) {
+      // Direct human-to-human reply -> bypass AI response
+      setIsTyping(false);
+      await updateChatContent(currentChat.id, updatedMessages);
+      return;
+    }
+
+    // Engage AI guidance (What Would Jesus Do mode)
+    setIsTyping(true);
     await updateChatContent(currentChat.id, updatedMessages);
 
     try {
@@ -1327,7 +1593,9 @@ export default function App() {
         body: JSON.stringify({
           messages: updatedMessages.map(m => ({
             sender: m.sender,
-            text: m.text
+            senderName: m.senderName,
+            text: m.text,
+            quote: m.quote
           }))
         })
       });
@@ -1559,13 +1827,46 @@ export default function App() {
             >
               <MenuIcon className="w-6 h-6" />
             </button>
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-[#4A4036]">
-                What Would Jesus Do?
-              </h1>
-              <p className="text-xs text-[#8B7D6B] mt-0.5 font-medium">
-                Guided Reflection
-              </p>
+            <div className="flex items-center space-x-3">
+              <div>
+                <h1 className="text-[17px] font-semibold tracking-tight text-[#4A4036] leading-tight">
+                  What Would Jesus Do?
+                </h1>
+                <p className="text-[11px] text-[#8B7D6B] font-medium leading-none mt-1">
+                  {activeChat.participants && activeChat.participants.length > 0 ? "Shared Sanctuary" : "Guided Reflection"}
+                </p>
+              </div>
+
+              {activeChat.participants && activeChat.participants.length > 0 && (
+                <div className="flex -space-x-1.5 ml-2 flex-shrink-0 items-center">
+                  {activeChat.participants.map((p) => {
+                    const isMe = p.id === user?.id;
+                    const firstLetter = p.username ? p.username[0].toUpperCase() : '?';
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          if (!isMe) {
+                            setReplyToUser(p);
+                            showToast(`Replying directly to @${p.username}`);
+                          }
+                        }}
+                        title={isMe ? `${p.username} (You)` : `Reply directly to @${p.username}`}
+                        className={`w-6 h-6 rounded-full bg-[#E5E0D8] border border-white flex items-center justify-center text-[10px] font-bold text-[#6D6253] shadow-sm relative z-10 hover:z-20 transition-all hover:scale-110 active:scale-90 overflow-hidden ${
+                          !isMe ? 'ring-1 ring-[#8B7D6B]/40 hover:ring-2' : ''
+                        }`}
+                      >
+                        {p.avatar_url ? (
+                          <img src={p.avatar_url} alt={p.username} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{firstLetter}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
           
@@ -1611,53 +1912,70 @@ export default function App() {
 
         {/* Chat Area - Spacious and calming */}
         <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-          {messages.map((msg) => (
-            <div 
-              key={msg.id} 
-              className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-            >
+          {messages.map((msg) => {
+            const isMe = msg.sender === 'user' && (msg.senderId === undefined || msg.senderId === user?.id);
+            return (
               <div 
-                className={`
-                  relative max-w-[85%] px-5 py-3.5 text-[15px] leading-relaxed shadow-sm
-                  ${msg.sender === 'user' 
-                    ? 'bg-[#DED7CD] text-[#3A3229] rounded-[24px] rounded-br-[8px]' 
-                    : 'bg-white text-[#4A4036] rounded-[24px] rounded-bl-[8px] border border-[#F0EBE1] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)]'
-                  }
-                `}
+                key={msg.id} 
+                onClick={() => handleMessageTap(msg)}
+                className={`flex flex-col cursor-pointer ${isMe ? 'items-end' : 'items-start'} group/bubble`}
               >
-                <ReactMarkdown
-                  components={{
-                    p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                    ul: ({ node, ...props }: any) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
-                    ol: ({ node, ...props }: any) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
-                    li: ({ node, ...props }: any) => <li className="text-[14.5px]" {...props} />,
-                    strong: ({ node, ...props }: any) => <strong className="font-bold" {...props} />,
-                    em: ({ node, ...props }: any) => <em className="italic" {...props} />,
-                    code: ({ node, className, children, ...props }: any) => {
-                      const match = /language-(\w+)/.exec(className || '');
-                      const inline = !match;
-                      return inline ? (
-                        <code className="bg-[#F0EBE1] text-[#6D6253] px-1 py-0.5 rounded text-[13px] font-mono border border-[#E5E0D8]/40" {...props}>
-                          {children}
-                        </code>
-                      ) : (
-                        <pre className="bg-[#F0EBE1]/40 p-3 rounded-lg overflow-x-auto text-[13px] font-mono my-2 border border-[#F0EBE1] max-w-full">
-                          <code className={className} {...props}>
+                {!isMe && msg.sender === 'user' && (
+                  <span className="text-[10.5px] font-bold text-[#8B7D6B] mb-1 px-2 select-none">
+                    @{msg.senderName || 'Friend'}
+                  </span>
+                )}
+                <div 
+                  className={`
+                    relative max-w-[85%] px-5 py-3.5 text-[15px] leading-relaxed shadow-sm transition-all duration-300 group-hover/bubble:shadow-md
+                    ${isMe 
+                      ? 'bg-[#DED7CD] text-[#3A3229] rounded-[24px] rounded-br-[8px]' 
+                      : 'bg-white text-[#4A4036] rounded-[24px] rounded-bl-[8px] border border-[#F0EBE1] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.03)]'
+                    }
+                  `}
+                >
+                  {msg.quote && (
+                    <div className="mb-2 pl-2.5 border-l-2 border-[#8B7D6B] text-[12px] text-[#8B7D6B] opacity-90 select-none bg-[#FAF8F5]/60 py-1 pr-2 rounded-r-md">
+                      <span className="font-semibold block text-[10px] uppercase tracking-wider mb-0.5">Quoting {msg.quote.senderName}</span>
+                      <p className="truncate italic">"{msg.quote.text}"</p>
+                    </div>
+                  )}
+
+                  <ReactMarkdown
+                    components={{
+                      p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                      ul: ({ node, ...props }: any) => <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />,
+                      ol: ({ node, ...props }: any) => <ol className="list-decimal pl-5 mb-2 space-y-1" {...props} />,
+                      li: ({ node, ...props }: any) => <li className="text-[14.5px]" {...props} />,
+                      strong: ({ node, ...props }: any) => <strong className="font-bold" {...props} />,
+                      em: ({ node, ...props }: any) => <em className="italic" {...props} />,
+                      code: ({ node, className, children, ...props }: any) => {
+                        const match = /language-(\w+)/.exec(className || '');
+                        const inline = !match;
+                        return inline ? (
+                          <code className="bg-[#F0EBE1] text-[#6D6253] px-1 py-0.5 rounded text-[13px] font-mono border border-[#E5E0D8]/40" {...props}>
                             {children}
                           </code>
-                        </pre>
-                      );
-                    }
-                  }}
-                >
-                  {msg.text}
-                </ReactMarkdown>
+                        ) : (
+                          <pre className="bg-[#F0EBE1]/40 p-3 rounded-lg overflow-x-auto text-[13px] font-mono my-2 border border-[#F0EBE1] max-w-full">
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          </pre>
+                        );
+                      }
+                    }}
+                  >
+                    {msg.text}
+                  </ReactMarkdown>
+                </div>
+                <span className="text-[11px] text-[#A69C8E] mt-1.5 px-2 flex items-center space-x-1 opacity-60 group-hover/bubble:opacity-100 transition-opacity select-none">
+                  <span>{msg.timestamp}</span>
+                  <span className="text-[9px] text-[#C2B8AA]">• Tap to quote/reply</span>
+                </span>
               </div>
-              <span className="text-[11px] text-[#A69C8E] mt-1.5 px-2">
-                {msg.timestamp}
-              </span>
-            </div>
-          ))}
+            );
+          })}
           
           {/* Typing Indicator */}
           {isTyping && (
@@ -1674,6 +1992,50 @@ export default function App() {
 
         {/* Input Area - Pill shaped, soft edges, matching the sketch's bottom section */}
         <div className="p-4 bg-gradient-to-t from-[#FAF8F5] via-[#FAF8F5] to-transparent pt-6">
+          
+          {/* Active Context Pills */}
+          {(replyToUser || quotedMessage) && (
+            <div className="flex flex-col space-y-1.5 mb-3 px-2">
+              {quotedMessage && (
+                <div className="flex items-center justify-between bg-white border border-[#E5E0D8] rounded-[16px] px-3.5 py-2 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+                  <div className="flex items-center space-x-2 text-[12px] truncate">
+                    <span className="text-[#8B7D6B] font-bold flex-shrink-0">Quoting {quotedMessage.sender === 'ai' ? 'Guidance' : `@${quotedMessage.senderName || 'user'}`}:</span>
+                    <span className="text-[#6D6253] italic truncate">"{quotedMessage.text}"</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setQuotedMessage(null)}
+                    className="p-1 text-[#A69C8E] hover:text-red-500 hover:bg-[#F0EBE1] rounded-full transition-colors ml-2 flex-shrink-0"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              )}
+              {replyToUser && (
+                <div className="flex items-center justify-between bg-[#EFECE6] border border-[#DED7CD] rounded-[16px] px-3.5 py-2 shadow-sm">
+                  <div className="flex items-center space-x-2 text-[12px] truncate">
+                    <span className="w-1.5 h-1.5 bg-[#8B7D6B] rounded-full flex-shrink-0 animate-pulse"></span>
+                    <span className="text-[#4A4036] font-bold">Replying directly to @{replyToUser.username}</span>
+                    <span className="text-[#8B7D6B] text-[10px] font-semibold uppercase tracking-wider">(LLM Paused)</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setReplyToUser(null)}
+                    className="p-1 text-[#8B7D6B] hover:text-red-600 hover:bg-[#DED7CD] rounded-full transition-colors ml-2 flex-shrink-0"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <form 
             onSubmit={handleSend}
             className={`
@@ -1727,7 +2089,7 @@ export default function App() {
                     handleSend(e);
                   }
                 }}
-                placeholder="Share your situation..."
+                placeholder={replyToUser ? `Whisper directly to @${replyToUser.username}...` : "Share your situation..."}
                 className="flex-1 max-h-[192px] min-h-[44px] bg-transparent resize-none outline-none py-3 px-4 text-[#4A4036] placeholder-[#A69C8E]"
                 rows={1}
                 style={{ height: 'auto' }}
@@ -1751,7 +2113,7 @@ export default function App() {
           
           <div className="text-center mt-3 mb-1">
             <p className="text-[10px] text-[#A69C8E] uppercase tracking-wider font-semibold">
-              Take a moment to whisper a quick prayer before you send.
+              {replyToUser ? `Whispering directly to @${replyToUser.username} (AI paused)` : "Take a moment to whisper a quick prayer before you send."}
             </p>
           </div>
         </div>
@@ -2205,32 +2567,49 @@ export default function App() {
                 </div>
               )}
 
-              {activeModal === 'invite' && (
-                <div className="space-y-5 py-4 w-full">
-                  <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center border border-green-200/50 shadow-sm mx-auto">
-                    <ShareIcon className="w-6 h-6 text-green-600" />
+              {activeModal === 'invite' && (() => {
+                const isLocal = !currentChatId || currentChatId === 'c-welcome';
+                const inviteUrl = isLocal ? '' : `${window.location.origin}/?invite=${currentChatId}`;
+                return (
+                  <div className="space-y-5 py-4 w-full">
+                    <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center border border-green-200/50 shadow-sm mx-auto">
+                      <ShareIcon className="w-6 h-6 text-green-600" />
+                    </div>
+                    <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Invite Someone</h3>
+                    {isLocal ? (
+                      <p className="text-[13.5px] text-amber-700 leading-relaxed font-medium">
+                        Please send your first message to begin this reflection before inviting a friend.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-[13.5px] text-[#8B7D6B] leading-relaxed">
+                          Share this sanctuary of quiet reflection and biblical guidance with family, friends, or coworkers.
+                        </p>
+                        <div className="bg-white border border-[#E5E0D8] rounded-[16px] p-3 text-[12.5px] font-mono text-[#6D6253] break-all select-all">
+                          {inviteUrl}
+                        </div>
+                      </>
+                    )}
+                    <div className="flex space-x-3 pt-2">
+                      <button 
+                        disabled={isLocal}
+                        onClick={() => {
+                          navigator.clipboard.writeText(inviteUrl);
+                          showToast("Invitation link copied!");
+                          closeModal();
+                        }}
+                        className={`flex-1 py-3 text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95 ${
+                          isLocal
+                            ? 'bg-[#F0EBE1] text-[#C2B8AA] cursor-not-allowed'
+                            : 'bg-[#8B7D6B] hover:bg-[#6D6253] text-white'
+                        }`}
+                      >
+                        Copy Invitation Link
+                      </button>
+                    </div>
                   </div>
-                  <h3 className="text-lg font-bold text-[#4A4036] tracking-tight">Invite Someone</h3>
-                  <p className="text-[13.5px] text-[#8B7D6B] leading-relaxed">
-                    Share this sanctuary of quiet reflection and biblical guidance with family, friends, or coworkers.
-                  </p>
-                  <div className="bg-white border border-[#E5E0D8] rounded-[16px] p-3 text-[12.5px] font-mono text-[#6D6253] break-all select-all">
-                    {window.location.origin}
-                  </div>
-                  <div className="flex space-x-3 pt-2">
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(window.location.origin);
-                        showToast("Invitation link copied!");
-                        closeModal();
-                      }}
-                      className="flex-1 py-3 bg-[#8B7D6B] hover:bg-[#6D6253] text-white text-[13px] font-semibold rounded-[20px] shadow transition-all active:scale-95"
-                    >
-                      Copy Invitation Link
-                    </button>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
             </div>
           </div>
