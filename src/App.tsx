@@ -1113,100 +1113,50 @@ export default function App() {
   // Join chat via invitation link
   const joinChatViaInvite = async (inviteId: string, currentUser: User) => {
     try {
-      console.log("[Invite Flow] Attempting to join chat:", inviteId);
-      const { data: chatData, error: fetchError } = await supabase
-        .from('chats')
+      console.log("[Invite Flow] Joining chat via RPC:", inviteId);
+      
+      // 1. Fetch current user's profile info
+      const { data: profileData } = await supabase
+        .from('profiles')
         .select('*')
-        .eq('id', inviteId)
+        .eq('id', currentUser.id)
         .single();
 
-      if (fetchError || !chatData) {
-        console.error("[Invite Flow] Error fetching chat details:", fetchError?.message);
-        showToast("Could not find the invited conversation.");
+      const newParticipant = {
+        id: currentUser.id,
+        username: profileData?.username || currentUser.email?.split('@')[0] || 'Friend',
+        email: currentUser.email || '',
+        avatar_url: profileData?.avatar_url || null
+      };
+
+      const joinMsg: Message = {
+        id: Date.now(),
+        sender: 'ai',
+        text: `✨ **@${newParticipant.username}** joined the sanctuary.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+
+      // 2. Call the secure RPC function to join the chat bypassing RLS
+      const { error: joinError } = await supabase.rpc('join_chat', {
+        chat_id: inviteId,
+        new_member: newParticipant,
+        system_msg: joinMsg
+      });
+
+      if (joinError) {
+        console.error("[Invite Flow] RPC join error:", joinError.message);
+        showToast("Could not join the shared sanctuary.");
         return;
       }
 
-      let updatedParticipants = chatData.participants || [];
-      let needsUpdate = false;
-      let activeMessages = chatData.messages || [];
+      showToast(`Joined the shared reflection sanctuary!`);
 
-      // 1. If it's a new group chat and creator is not in participants, add the creator first
-      const isCreatorInList = updatedParticipants.some((p: any) => p.id === chatData.user_id);
-      if (!isCreatorInList) {
-        const { data: creatorProfile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', chatData.user_id)
-          .single();
-
-        if (creatorProfile) {
-          updatedParticipants.push({
-            id: creatorProfile.id,
-            username: creatorProfile.username || 'Creator',
-            email: creatorProfile.email || '',
-            avatar_url: creatorProfile.avatar_url || null
-          });
-          needsUpdate = true;
-        }
-      }
-
-      // 2. Add current joining user if they aren't already in there
-      const isJoined = updatedParticipants.some((p: any) => p.id === currentUser.id);
-      if (!isJoined && currentUser.id !== chatData.user_id) {
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', currentUser.id)
-          .single();
-
-        const newParticipant = {
-          id: currentUser.id,
-          username: profileData?.username || currentUser.email?.split('@')[0] || 'Friend',
-          email: currentUser.email || '',
-          avatar_url: profileData?.avatar_url || null
-        };
-
-        updatedParticipants.push(newParticipant);
-        needsUpdate = true;
-
-        // Add a system join message into the thread
-        const joinMsg: Message = {
-          id: Date.now(),
-          sender: 'ai',
-          text: `✨ **@${newParticipant.username}** joined the sanctuary.`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        activeMessages = [...activeMessages, joinMsg];
-      }
-
-      if (needsUpdate) {
-        console.log("[Invite Flow] Updating chat participants...");
-        const { error: updateError } = await supabase
-          .from('chats')
-          .update({
-            participants: updatedParticipants,
-            messages: activeMessages,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', inviteId);
-
-        if (updateError) {
-          console.error("[Invite Flow] Failed to update chat participants:", updateError.message);
-          showToast("Failed to join the shared conversation.");
-          return;
-        }
-
-        if (!isJoined && currentUser.id !== chatData.user_id) {
-          showToast(`Joined the shared reflection sanctuary!`);
-        }
-      }
-
-      // Remove invite parameter from URL
+      // 3. Remove invite parameter from URL
       const url = new URL(window.location.href);
       url.searchParams.delete('invite');
       window.history.replaceState({}, document.title, url.pathname + url.search);
 
-      // Refresh chats list and focus the joined chat
+      // 4. Refresh chats list and focus the joined chat
       await loadChats(currentUser);
       setCurrentChatId(inviteId);
     } catch (e) {
